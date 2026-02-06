@@ -1,0 +1,58 @@
+{
+  "name": "json-patch-to-crdt",
+  "version": "0.0.0",
+  "description": "Convert JSON Patch (RFC 6902) to and from a CRDT-friendly representation.",
+  "keywords": [
+    "crdt",
+    "json",
+    "json-patch",
+    "rfc6902"
+  ],
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./internals": {
+      "types": "./dist/internals.d.ts",
+      "import": "./dist/internals.mjs",
+      "require": "./dist/internals.js"
+    }
+  },
+  "publishConfig": {
+    "provenance": true
+  },
+  "scripts": {
+    "test": "bun test",
+    "lint": "oxlint . --type-aware",
+    "lint:fix": "oxlint . --type-aware --fix",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt . --check",
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown --config tsdown.config.mts",
+    "ci:publish": "bun run build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "2.29.8",
+    "@types/bun": "latest",
+    "oxfmt": "0.28.0",
+    "oxlint": "1.43.0",
+    "oxlint-tsgolint": "0.11.4",
+    "tsdown": "0.20.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
