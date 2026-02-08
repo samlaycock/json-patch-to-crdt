@@ -5,7 +5,6 @@
 ### Minor Changes
 
 - 27a3fa1: BREAKING: the main `json-patch-to-crdt` entrypoint is now intentionally high-level. Low-level CRDT primitives and advanced helpers moved to `json-patch-to-crdt/internals`.
-
   - Narrowed root exports to an application-focused API (`createState`, `forkState`, `applyPatch`, `mergeState`, serialization, and JSON diffing).
   - Added `forkState(origin, actor)` to simplify shared-origin replica creation without requiring clock/doc internals.
   - Split patch option/result types:
