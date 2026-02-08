@@ -9,6 +9,9 @@
     "rfc6902"
   ],
   "license": "MIT",
+  "repository": {
+    "url": "https://github.com/samlaycock/json-patch-to-crdt"
+  },
   "files": [
     "dist"
   ],
