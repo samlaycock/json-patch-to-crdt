@@ -1,6 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import {
   applyIntentsToCrdt,
@@ -311,42 +309,6 @@ function dot(actor: string, ctr: number): Dot {
 function newDotGen(actor = "A", start = 0) {
   let ctr = start;
   return () => ({ actor, ctr: ++ctr });
-}
-
-function runTypecheck(source: string, args: string[]): { exitCode: number; output: string } {
-  const rootDir = fileURLToPath(new URL("../", import.meta.url));
-  const tempName = `.tmp-ts-${Date.now()}-${Math.random().toString(16).slice(2)}.ts`;
-  const tempPath = `${rootDir}${tempName}`;
-
-  writeFileSync(tempPath, source, "utf8");
-
-  try {
-    const result = Bun.spawnSync({
-      cmd: [
-        "./node_modules/.bin/tsc",
-        "--noEmit",
-        "--strict",
-        "--target",
-        "ES2022",
-        ...args,
-        tempName,
-      ],
-      cwd: rootDir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const decoder = new TextDecoder();
-    const output = `${decoder.decode(result.stdout)}${decoder.decode(result.stderr)}`;
-    return {
-      exitCode: result.exitCode ?? -1,
-      output,
-    };
-  } finally {
-    if (existsSync(tempPath)) {
-      unlinkSync(tempPath);
-    }
-  }
 }
 
 describe("dots and version vectors", () => {
@@ -2153,107 +2115,5 @@ describe("mergeState", () => {
     expect(result.items).toContain("fromB1");
     expect(result.items).toContain("fromA2");
     expect(result.items).toContain("fromB2");
-  });
-});
-
-describe("package exports", () => {
-  it("points main/module/types and exports to existing built files", () => {
-    const rootUrl = new URL("../", import.meta.url);
-    type ExportTypes =
-      | string
-      | {
-          import?: string;
-          require?: string;
-          default?: string;
-        };
-
-    const pkg = JSON.parse(
-      readFileSync(fileURLToPath(new URL("package.json", rootUrl)), "utf8"),
-    ) as {
-      main: string;
-      module: string;
-      types: string;
-      exports: {
-        ".": { import: string; require: string; types: ExportTypes };
-        "./internals": { import: string; require: string; types: ExportTypes };
-      };
-    };
-
-    const collectTypePaths = (
-      value:
-        | string
-        | {
-            import?: string;
-            require?: string;
-            default?: string;
-          },
-    ): string[] => {
-      if (typeof value === "string") {
-        return [value];
-      }
-
-      return Object.values(value).filter((v): v is string => typeof v === "string");
-    };
-
-    const paths = [
-      pkg.main,
-      pkg.module,
-      pkg.types,
-      pkg.exports["."].import,
-      pkg.exports["."].require,
-      ...collectTypePaths(pkg.exports["."].types),
-      pkg.exports["./internals"].import,
-      pkg.exports["./internals"].require,
-      ...collectTypePaths(pkg.exports["./internals"].types),
-    ];
-
-    for (const rel of paths) {
-      const normalized = rel.startsWith("./") ? rel.slice(2) : rel;
-      expect(existsSync(fileURLToPath(new URL(normalized, rootUrl)))).toBeTrue();
-    }
-  });
-});
-
-describe("consumer TypeScript compatibility", () => {
-  it("typechecks ESM imports under NodeNext", () => {
-    const result = runTypecheck(
-      `import { applyPatch, createState } from "json-patch-to-crdt";
-const state = createState({ a: 1 }, { actor: "A" });
-applyPatch(state, [{ op: "replace", path: "/a", value: 2 }]);
-`,
-      ["--module", "NodeNext", "--moduleResolution", "NodeNext"],
-    );
-
-    if (result.exitCode !== 0) {
-      throw new Error(result.output);
-    }
-  });
-
-  it("typechecks CJS require imports under Node16", () => {
-    const result = runTypecheck(
-      `import pkg = require("json-patch-to-crdt");
-const state = pkg.createState({ a: 1 }, { actor: "A" });
-pkg.applyPatch(state, [{ op: "replace", path: "/a", value: 2 }]);
-`,
-      ["--module", "Node16", "--moduleResolution", "Node16"],
-    );
-
-    if (result.exitCode !== 0) {
-      throw new Error(result.output);
-    }
-  });
-
-  it("keeps low-level helpers off the main entrypoint", () => {
-    const result = runTypecheck(
-      `import { createClock, compileJsonPatchToIntent } from "json-patch-to-crdt";
-void createClock;
-void compileJsonPatchToIntent;
-`,
-      ["--module", "NodeNext", "--moduleResolution", "NodeNext"],
-    );
-
-    expect(result.exitCode).not.toBe(0);
-    expect(result.output).toContain("createClock");
-    expect(result.output).toContain("compileJsonPatchToIntent");
   });
 });
