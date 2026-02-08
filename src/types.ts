@@ -152,24 +152,76 @@ export type ApplyPatchAsActorResult = {
   vv: VersionVector;
 };
 
-/** Result of applying a patch: success or a 409 conflict with a message. */
-export type ApplyResult = { ok: true } | { ok: false; code: 409; message: string };
+/** Options for internals-only `applyPatchAsActor`. */
+export type ApplyPatchAsActorOptions = {
+  base?: Doc;
+  testAgainst?: "head" | "base";
+  semantics?: PatchSemantics;
+};
+
+/** Typed failure reason used across patch/merge helpers. */
+export type PatchErrorReason =
+  | "INVALID_PATCH"
+  | "INVALID_POINTER"
+  | "MISSING_PARENT"
+  | "MISSING_TARGET"
+  | "INVALID_TARGET"
+  | "OUT_OF_BOUNDS"
+  | "TEST_FAILED"
+  | "INVALID_MOVE"
+  | "LINEAGE_MISMATCH";
+
+/** Structured conflict payload used by non-throwing APIs. */
+export type ApplyError = {
+  ok: false;
+  /** HTTP-friendly status code for conflict-style failures. */
+  code: 409;
+  /** Machine-readable reason for branching logic. */
+  reason: PatchErrorReason;
+  /** Human-readable description of the failure. */
+  message: string;
+  /** Optional pointer/path context when available. */
+  path?: string;
+  /** Optional patch operation index when available. */
+  opIndex?: number;
+};
+
+/** Result of applying a patch: success or structured conflict details. */
+export type ApplyResult = { ok: true } | ApplyError;
 
 /** How JSON Patch operations are interpreted during application. */
 export type PatchSemantics = "base" | "sequential";
 
+/** Options for compile/validation helpers. */
+export type CompilePatchOptions = {
+  semantics?: PatchSemantics;
+};
+
 /**
- * Options for `applyPatch` / `applyPatchInPlace`.
- * - `semantics: "base"` maps array indices against a fixed snapshot (current default).
- * - `semantics: "sequential"` applies operations one-by-one against the evolving head.
- * - `atomic` applies only to `applyPatchInPlace` (ignored by immutable `applyPatch`).
+ * Options for immutable patch application (`applyPatch` / `tryApplyPatch`).
+ * - `semantics: "sequential"` applies operations one-by-one against the evolving head (default).
+ * - `semantics: "base"` maps array indices against a fixed snapshot.
+ * - `base` should be a previously observed state snapshot from the same document lineage.
  */
 export type ApplyPatchOptions = {
-  base?: Doc;
+  base?: CrdtState;
   testAgainst?: "head" | "base";
   semantics?: PatchSemantics;
+};
+
+/** Options for in-place patch application (`applyPatchInPlace` / `tryApplyPatchInPlace`). */
+export type ApplyPatchInPlaceOptions = ApplyPatchOptions & {
   atomic?: boolean;
 };
+
+/** Non-throwing result for immutable patch application. */
+export type TryApplyPatchResult = { ok: true; state: CrdtState } | { ok: false; error: ApplyError };
+
+/** Non-throwing result for in-place patch application. */
+export type TryApplyPatchInPlaceResult = { ok: true } | { ok: false; error: ApplyError };
+
+/** Non-throwing result for patch validation preflight. */
+export type ValidatePatchResult = { ok: true } | { ok: false; error: ApplyError };
 
 /** Options for `mergeState`. */
 export type MergeStateOptions = {
@@ -192,6 +244,23 @@ export type MergeDocOptions = {
    * Defaults to `true`.
    */
   requireSharedOrigin?: boolean;
+};
+
+/** Non-throwing result for `mergeDoc`. */
+export type TryMergeDocResult = { ok: true; doc: Doc } | { ok: false; error: ApplyError };
+
+/** Non-throwing result for `mergeState`. */
+export type TryMergeStateResult = { ok: true; state: CrdtState } | { ok: false; error: ApplyError };
+
+/** Options-object overload shape for low-level JSON Patch -> CRDT conversion. */
+export type JsonPatchToCrdtOptions = {
+  base: Doc;
+  head: Doc;
+  patch: JsonPatchOp[];
+  newDot: () => Dot;
+  evalTestAgainst?: "head" | "base";
+  bumpCounterAbove?: (ctr: number) => void;
+  semantics?: PatchSemantics;
 };
 
 /** Options for `crdtToJsonPatch` and `diffJsonPatch`. */

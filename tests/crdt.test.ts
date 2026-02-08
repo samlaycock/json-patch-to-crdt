@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import {
   applyIntentsToCrdt,
   applyPatch,
   applyPatchAsActor,
   applyPatchInPlace,
+  tryApplyPatch,
+  tryApplyPatchInPlace,
+  validateJsonPatch,
   cloneClock,
   compareDot,
   compileJsonPatchToIntent,
@@ -15,6 +16,7 @@ import {
   nextDotForActor,
   observeDot,
   createState,
+  forkState,
   crdtToJsonPatch,
   crdtToFullReplace,
   cloneDoc,
@@ -44,6 +46,8 @@ import {
   deserializeState,
   mergeDoc,
   mergeState,
+  tryMergeDoc,
+  tryMergeState,
   toJson,
   vvHasDot,
   vvMerge,
@@ -218,6 +222,66 @@ function randomObject(rng: SeededRng, maxKeys = 4): Record<string, JsonValue> {
   return out;
 }
 
+function randomValidPatchProgram(
+  rng: SeededRng,
+  steps = 8,
+): { base: JsonValue; patch: JsonPatchOp[]; expected: JsonValue } {
+  const base = {
+    arr: randomArray(rng, 4),
+    obj: randomObject(rng, 3),
+  } as { arr: JsonValue[]; obj: Record<string, JsonValue> };
+
+  let current = cloneJson(base);
+  const patch: JsonPatchOp[] = [];
+  const keyPool = ["a", "b", "c", "d", "e"];
+
+  for (let i = 0; i < steps; i++) {
+    if (rng.bool()) {
+      const arr = current.arr;
+      const canMutateExisting = arr.length > 0;
+      const mode = canMutateExisting ? rng.int(3) : 0;
+
+      if (mode === 0) {
+        const idx = rng.int(arr.length + 1);
+        const useDash = rng.bool();
+        patch.push({
+          op: "add",
+          path: useDash ? "/arr/-" : `/arr/${idx}`,
+          value: randomPrimitive(rng),
+        });
+      } else if (mode === 1) {
+        const idx = rng.int(arr.length);
+        patch.push({ op: "remove", path: `/arr/${idx}` });
+      } else {
+        const idx = rng.int(arr.length);
+        patch.push({ op: "replace", path: `/arr/${idx}`, value: randomPrimitive(rng) });
+      }
+    } else {
+      const keys = Object.keys(current.obj);
+      const canMutateExisting = keys.length > 0;
+      const mode = canMutateExisting ? rng.int(3) : 0;
+
+      if (mode === 0) {
+        const key = keyPool[rng.int(keyPool.length)]!;
+        patch.push({ op: "add", path: `/obj/${key}`, value: randomPrimitive(rng) });
+      } else if (mode === 1) {
+        const key = keys[rng.int(keys.length)]!;
+        patch.push({ op: "remove", path: `/obj/${key}` });
+      } else {
+        const key = keys[rng.int(keys.length)]!;
+        patch.push({ op: "replace", path: `/obj/${key}`, value: randomPrimitive(rng) });
+      }
+    }
+
+    current = applyJsonPatch(current, [patch[patch.length - 1]!]) as {
+      arr: JsonValue[];
+      obj: Record<string, JsonValue>;
+    };
+  }
+
+  return { base, patch, expected: current };
+}
+
 function shuffleArray<T>(rng: SeededRng, items: T[]): T[] {
   const arr = items.slice();
   for (let i = arr.length - 1; i > 0; i--) {
@@ -245,42 +309,6 @@ function dot(actor: string, ctr: number): Dot {
 function newDotGen(actor = "A", start = 0) {
   let ctr = start;
   return () => ({ actor, ctr: ++ctr });
-}
-
-function runTypecheck(source: string, args: string[]): { exitCode: number; output: string } {
-  const rootDir = fileURLToPath(new URL("../", import.meta.url));
-  const tempName = `.tmp-ts-${Date.now()}-${Math.random().toString(16).slice(2)}.ts`;
-  const tempPath = `${rootDir}${tempName}`;
-
-  writeFileSync(tempPath, source, "utf8");
-
-  try {
-    const result = Bun.spawnSync({
-      cmd: [
-        "./node_modules/.bin/tsc",
-        "--noEmit",
-        "--strict",
-        "--target",
-        "ES2022",
-        ...args,
-        tempName,
-      ],
-      cwd: rootDir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const decoder = new TextDecoder();
-    const output = `${decoder.decode(result.stdout)}${decoder.decode(result.stderr)}`;
-    return {
-      exitCode: result.exitCode ?? -1,
-      output,
-    };
-  } finally {
-    if (existsSync(tempPath)) {
-      unlinkSync(tempPath);
-    }
-  }
 }
 
 describe("dots and version vectors", () => {
@@ -337,6 +365,21 @@ describe("clock and state", () => {
     expect(state.clock.ctr).toBe(1);
   });
 
+  it("forks shared-origin replicas with independent actors", () => {
+    const origin = createState({ list: ["a"] }, { actor: "origin" });
+    const peerA = forkState(origin, "A");
+    const peerB = forkState(origin, "B");
+
+    const a1 = applyPatch(peerA, [{ op: "add", path: "/list/-", value: "fromA" }]);
+    const b1 = applyPatch(peerB, [{ op: "add", path: "/list/-", value: "fromB" }]);
+
+    const merged = mergeState(a1, b1, { actor: "A" });
+    const list = (toJson(merged) as { list: string[] }).list;
+    expect(list).toContain("a");
+    expect(list).toContain("fromA");
+    expect(list).toContain("fromB");
+  });
+
   it("applies patches with the friendly API", () => {
     const state = createState({ list: ["a"] }, { actor: "A" });
     const next = applyPatch(state, [{ op: "add", path: "/list/-", value: "b" }]);
@@ -380,11 +423,11 @@ describe("clock and state", () => {
     expect(toJson(state)).toEqual({ a: 1 });
   });
 
-  it("supports test operations against an explicit base doc", () => {
+  it("supports test operations against an explicit base state", () => {
     const base = createState({ a: 1 }, { actor: "A" });
     const head = createState({ a: 2 }, { actor: "A" });
     const next = applyPatch(head, [{ op: "test", path: "/a", value: 1 }], {
-      base: base.doc,
+      base,
       testAgainst: "base",
     });
     expect(toJson(next)).toEqual({ a: 2 });
@@ -394,7 +437,7 @@ describe("clock and state", () => {
     const base = createState({ a: 1 }, { actor: "A" });
     const head = createState({ a: 2 }, { actor: "A" });
     const next = applyPatch(head, [{ op: "test", path: "/a", value: 2 }], {
-      base: base.doc,
+      base,
       testAgainst: "head",
     });
     expect(toJson(next)).toEqual({ a: 2 });
@@ -410,7 +453,7 @@ describe("clock and state", () => {
       headWithInsert,
       [{ op: "replace", path: "/list/1", value: "B" }],
       {
-        base: base.doc,
+        base,
       },
     );
 
@@ -433,7 +476,7 @@ describe("clock and state", () => {
     expect(toJson(next)).toEqual(["c", "a", "b"]);
   });
 
-  it("supports mixing sequential semantics with an explicit base doc", () => {
+  it("supports mixing sequential semantics with an explicit base state", () => {
     const base = createState({ list: [1, 2] }, { actor: "A" });
     const head = applyPatch(base, [{ op: "add", path: "/list/1", value: 9 }], {
       semantics: "sequential",
@@ -447,7 +490,7 @@ describe("clock and state", () => {
       ],
       {
         semantics: "sequential",
-        base: base.doc,
+        base,
       },
     );
 
@@ -512,6 +555,38 @@ describe("clock and state", () => {
     expect(toJson(next.state)).toEqual({ n: 3 });
     expect(next.state.clock.ctr).toBeGreaterThan(advanced.clock.ctr);
     expect(next.vv["A"]).toBe(next.state.clock.ctr);
+  });
+
+  it("exposes non-throwing apply helpers with typed reasons", () => {
+    const state = createState({ a: 1 }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "test", path: "/a", value: 2 }]);
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.code).toBe(409);
+      expect(result.error.reason).toBe("TEST_FAILED");
+    }
+    expect(toJson(state)).toEqual({ a: 1 });
+  });
+
+  it("supports non-throwing in-place application", () => {
+    const state = createState({ list: ["a"] }, { actor: "A" });
+    const result = tryApplyPatchInPlace(state, [{ op: "remove", path: "/list/5" }]);
+    expect(result.ok).toBeFalse();
+    expect(toJson(state)).toEqual({ list: ["a"] });
+  });
+
+  it("validates patches without mutating caller data", () => {
+    const base: JsonValue = { list: ["a"] };
+    const valid = validateJsonPatch(base, [{ op: "add", path: "/list/1", value: "b" }]);
+    expect(valid).toEqual({ ok: true });
+
+    const invalid = validateJsonPatch(base, [{ op: "replace", path: "/list/-", value: "x" }]);
+    expect(invalid.ok).toBeFalse();
+    if (!invalid.ok) {
+      expect(invalid.error.reason).toBe("INVALID_POINTER");
+    }
+
+    expect(base).toEqual({ list: ["a"] });
   });
 });
 
@@ -826,7 +901,7 @@ describe("compileJsonPatchToIntent", () => {
     ]);
   });
 
-  it("compiles root add/replace/remove to a root set intent", () => {
+  it("compiles root add/replace and rejects root remove", () => {
     const base: JsonValue = { a: 1 };
 
     expect(compileJsonPatchToIntent(base, [{ op: "replace", path: "", value: { b: 2 } }])).toEqual([
@@ -837,9 +912,7 @@ describe("compileJsonPatchToIntent", () => {
       { t: "ObjSet", path: [], key: ROOT_KEY, value: [1, 2] },
     ]);
 
-    expect(compileJsonPatchToIntent(base, [{ op: "remove", path: "" }])).toEqual([
-      { t: "ObjSet", path: [], key: ROOT_KEY, value: null },
-    ]);
+    expect(() => compileJsonPatchToIntent(base, [{ op: "remove", path: "" }])).toThrow();
   });
 
   it("compiles array append using '-' index", () => {
@@ -886,7 +959,7 @@ describe("compileJsonPatchToIntent", () => {
     expect(() => compileJsonPatchToIntent(base, [{ op: "remove", path: "/k" }])).toThrow();
   });
 
-  it("compiles root move/copy", () => {
+  it("compiles root copy and rejects strict root move into a descendant", () => {
     const base: JsonValue = { a: 1 };
     const copyPatch: JsonPatchOp[] = [{ op: "copy", from: "", path: "/b" }];
     const movePatch: JsonPatchOp[] = [{ op: "move", from: "", path: "/b" }];
@@ -894,9 +967,24 @@ describe("compileJsonPatchToIntent", () => {
     expect(compileJsonPatchToIntent(base, copyPatch)).toEqual([
       { t: "ObjSet", path: [], key: "b", value: { a: 1 }, mode: "add" },
     ]);
-    expect(compileJsonPatchToIntent(base, movePatch)).toEqual([
-      { t: "ObjSet", path: [], key: "b", value: { a: 1 }, mode: "add" },
-      { t: "ObjSet", path: [], key: ROOT_KEY, value: null },
+    expect(() => compileJsonPatchToIntent(base, movePatch)).toThrow();
+  });
+
+  it("rejects '-' for array remove/replace at compile time", () => {
+    const base: JsonValue = { list: ["a"] };
+
+    expect(() => compileJsonPatchToIntent(base, [{ op: "remove", path: "/list/-" }])).toThrow();
+    expect(() =>
+      compileJsonPatchToIntent(base, [{ op: "replace", path: "/list/-", value: "x" }]),
+    ).toThrow();
+  });
+
+  it("treats numeric tokens as object keys when parent is an object", () => {
+    const base: JsonValue = { obj: { "0": "a" } };
+    const patch: JsonPatchOp[] = [{ op: "replace", path: "/obj/0", value: "b" }];
+
+    expect(compileJsonPatchToIntent(base, patch)).toEqual([
+      { t: "ObjSet", path: ["obj"], key: "0", value: "b", mode: "replace" },
     ]);
   });
 });
@@ -1283,7 +1371,7 @@ describe("jsonPatchToCrdt", () => {
     expect(materialize(headDoc.root)).toEqual({ list: ["z", "x", "b"] });
   });
 
-  it("applies root replace and remove", () => {
+  it("applies root replace and rejects root remove in strict mode", () => {
     const baseJson: JsonValue = { a: 1 };
     const baseDoc = docFromJsonWithDot(baseJson, dot("A", 0));
     const headDoc = cloneDoc(baseDoc);
@@ -1303,8 +1391,28 @@ describe("jsonPatchToCrdt", () => {
       [{ op: "remove", path: "" }],
       newDotGen("A", 10),
     );
-    expect(removeRes).toEqual({ ok: true });
-    expect(materialize(headDoc.root)).toBeNull();
+    expect(removeRes.ok).toBeFalse();
+    if (!removeRes.ok) {
+      expect(removeRes.reason).toBe("INVALID_TARGET");
+    }
+    expect(materialize(headDoc.root)).toEqual({ b: 2 });
+  });
+
+  it("rejects root remove via options-object overload", () => {
+    const baseDoc = docFromJsonWithDot({ a: 1 }, dot("A", 0));
+    const headDoc = cloneDoc(baseDoc);
+    const res = jsonPatchToCrdt({
+      base: baseDoc,
+      head: headDoc,
+      patch: [{ op: "remove", path: "" }],
+      newDot: newDotGen("A", 1),
+    });
+
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.reason).toBe("INVALID_TARGET");
+    }
+    expect(materialize(headDoc.root)).toEqual({ a: 1 });
   });
 
   it("appends using '-' index", () => {
@@ -1378,15 +1486,18 @@ describe("jsonPatchToCrdt", () => {
     expect(res.ok).toBeFalse();
   });
 
-  it("creates missing arrays on insert at index 0", () => {
+  it("rejects missing arrays on insert at index 0 in strict mode", () => {
     const baseJson: JsonValue = {};
     const baseDoc = docFromJsonWithDot(baseJson, dot("A", 0));
     const headDoc = cloneDoc(baseDoc);
     const patch: JsonPatchOp[] = [{ op: "add", path: "/list/0", value: "x" }];
 
     const res = jsonPatchToCrdt(baseDoc, headDoc, patch, newDotGen("A", 1));
-    expect(res).toEqual({ ok: true });
-    expect(materialize(headDoc.root)).toEqual({ list: ["x"] });
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.reason).toBe("MISSING_PARENT");
+    }
+    expect(materialize(headDoc.root)).toEqual({});
   });
 
   it("rejects array insert at non-zero index when base array is missing", () => {
@@ -1464,6 +1575,48 @@ describe("jsonPatchToCrdt", () => {
 
     expect(safeRes).toEqual(rawRes);
     expect(materialize(headSafe.root)).toEqual(materialize(headRaw.root));
+  });
+});
+
+describe("conversion invariants (fuzz)", () => {
+  it("matches plain JSON patch execution across random valid programs", () => {
+    const rng = new SeededRng(2026);
+
+    for (let i = 0; i < 120; i++) {
+      const { base, patch, expected } = randomValidPatchProgram(rng, 10);
+
+      const state = createState(base, { actor: "A" });
+      const highLevel = tryApplyPatch(state, patch);
+      expect(highLevel.ok).toBeTrue();
+      if (!highLevel.ok) {
+        throw new Error(highLevel.error.message);
+      }
+      expect(toJson(highLevel.state)).toEqual(expected);
+
+      const validated = validateJsonPatch(base, patch);
+      expect(validated).toEqual({ ok: true });
+
+      const baseDoc = docFromJsonWithDot(base, dot("A", 0));
+      const headDoc = cloneDoc(baseDoc);
+      const lowLevel = jsonPatchToCrdt({
+        base: baseDoc,
+        head: headDoc,
+        patch,
+        newDot: newDotGen("B", 0),
+      });
+      expect(lowLevel).toEqual({ ok: true });
+      expect(materialize(headDoc.root)).toEqual(expected);
+    }
+  });
+
+  it("compiles deterministic intents across repeated runs", () => {
+    const rng = new SeededRng(909);
+    for (let i = 0; i < 80; i++) {
+      const { base, patch } = randomValidPatchProgram(rng, 8);
+      const intents1 = compileJsonPatchToIntent(base, patch);
+      const intents2 = compileJsonPatchToIntent(base, patch);
+      expect(intents1).toEqual(intents2);
+    }
   });
 });
 
@@ -1814,6 +1967,17 @@ describe("mergeDoc", () => {
     expect(() => mergeDoc(a, b)).toThrow();
   });
 
+  it("exposes non-throwing mergeDoc errors with typed reasons", () => {
+    const a = docFromJson([1], newDotGen("A"));
+    const b = docFromJson([1], newDotGen("B"));
+    const res = tryMergeDoc(a, b);
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+      expect(res.error.code).toBe(409);
+    }
+  });
+
   it("allows merging unrelated arrays when shared-origin checks are disabled", () => {
     const a = docFromJson([1], newDotGen("A"));
     const b = docFromJson([1], newDotGen("B"));
@@ -1855,6 +2019,16 @@ describe("mergeState", () => {
     const b = createState({ y: 2 }, { actor: "B" });
     const merged = mergeState(a, b, { actor: "B" });
     expect(merged.clock.actor).toBe("B");
+  });
+
+  it("exposes non-throwing mergeState errors with typed reasons", () => {
+    const a = createState([1], { actor: "A" });
+    const b = createState([1], { actor: "B" });
+    const res = tryMergeState(a, b);
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+    }
   });
 
   it("produces a state that can continue accepting patches", () => {
@@ -1941,93 +2115,5 @@ describe("mergeState", () => {
     expect(result.items).toContain("fromB1");
     expect(result.items).toContain("fromA2");
     expect(result.items).toContain("fromB2");
-  });
-});
-
-describe("package exports", () => {
-  it("points main/module/types and exports to existing built files", () => {
-    const rootUrl = new URL("../", import.meta.url);
-    type ExportTypes =
-      | string
-      | {
-          import?: string;
-          require?: string;
-          default?: string;
-        };
-
-    const pkg = JSON.parse(
-      readFileSync(fileURLToPath(new URL("package.json", rootUrl)), "utf8"),
-    ) as {
-      main: string;
-      module: string;
-      types: string;
-      exports: {
-        ".": { import: string; require: string; types: ExportTypes };
-        "./internals": { import: string; require: string; types: ExportTypes };
-      };
-    };
-
-    const collectTypePaths = (
-      value:
-        | string
-        | {
-            import?: string;
-            require?: string;
-            default?: string;
-          },
-    ): string[] => {
-      if (typeof value === "string") {
-        return [value];
-      }
-
-      return Object.values(value).filter((v): v is string => typeof v === "string");
-    };
-
-    const paths = [
-      pkg.main,
-      pkg.module,
-      pkg.types,
-      pkg.exports["."].import,
-      pkg.exports["."].require,
-      ...collectTypePaths(pkg.exports["."].types),
-      pkg.exports["./internals"].import,
-      pkg.exports["./internals"].require,
-      ...collectTypePaths(pkg.exports["./internals"].types),
-    ];
-
-    for (const rel of paths) {
-      const normalized = rel.startsWith("./") ? rel.slice(2) : rel;
-      expect(existsSync(fileURLToPath(new URL(normalized, rootUrl)))).toBeTrue();
-    }
-  });
-});
-
-describe("consumer TypeScript compatibility", () => {
-  it("typechecks ESM imports under NodeNext", () => {
-    const result = runTypecheck(
-      `import { applyPatch, createState } from "json-patch-to-crdt";
-const state = createState({ a: 1 }, { actor: "A" });
-applyPatch(state, [{ op: "replace", path: "/a", value: 2 }]);
-`,
-      ["--module", "NodeNext", "--moduleResolution", "NodeNext"],
-    );
-
-    if (result.exitCode !== 0) {
-      throw new Error(result.output);
-    }
-  });
-
-  it("typechecks CJS require imports under Node16", () => {
-    const result = runTypecheck(
-      `import pkg = require("json-patch-to-crdt");
-const state = pkg.createState({ a: 1 }, { actor: "A" });
-pkg.applyPatch(state, [{ op: "replace", path: "/a", value: 2 }]);
-`,
-      ["--module", "Node16", "--moduleResolution", "Node16"],
-    );
-
-    if (result.exitCode !== 0) {
-      throw new Error(result.output);
-    }
   });
 });

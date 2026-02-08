@@ -1,7 +1,13 @@
 import { compareDot, dotToElemId } from "./dot";
 import { materialize } from "./materialize";
 import { newObj, newReg, newSeq, objRemove, objSet } from "./nodes";
-import { compileJsonPatchToIntent, diffJsonPatch, getAtJson, jsonEquals } from "./patch";
+import {
+  PatchCompileError,
+  compileJsonPatchToIntent,
+  diffJsonPatch,
+  getAtJson,
+  jsonEquals,
+} from "./patch";
 import {
   HEAD,
   rgaDelete,
@@ -12,12 +18,14 @@ import {
 } from "./rga";
 import { ROOT_KEY } from "./types";
 import type {
+  ApplyError,
   ApplyResult,
   DiffOptions,
   Doc,
   Dot,
   ElemId,
   IntentOp,
+  JsonPatchToCrdtOptions,
   JsonPatchOp,
   JsonValue,
   Node,
@@ -294,7 +302,9 @@ function applyTest(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_TARGET",
       message: `test path missing at /${it.path.join("/")}`,
+      path: `/${it.path.join("/")}`,
     };
   }
 
@@ -302,7 +312,9 @@ function applyTest(
     return {
       ok: false,
       code: 409,
+      reason: "TEST_FAILED",
       message: `test failed at /${it.path.join("/")}`,
+      path: `/${it.path.join("/")}`,
     };
   }
 
@@ -321,14 +333,22 @@ function applyObjSet(
 
   const parentRes = getObjAtPathStrict(head, it.path);
   if (!parentRes.ok) {
-    return { ok: false, code: 409, message: parentRes.message };
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_PARENT",
+      message: parentRes.message,
+      path: `/${it.path.join("/")}`,
+    };
   }
 
   if (it.mode === "replace" && !parentRes.obj.entries.has(it.key)) {
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_TARGET",
       message: `no value at /${[...it.path, it.key].join("/")}`,
+      path: `/${[...it.path, it.key].join("/")}`,
     };
   }
 
@@ -345,14 +365,22 @@ function applyObjRemove(
 ): ApplyResult | null {
   const parentRes = getObjAtPathStrict(head, it.path);
   if (!parentRes.ok) {
-    return { ok: false, code: 409, message: parentRes.message };
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_PARENT",
+      message: parentRes.message,
+      path: `/${it.path.join("/")}`,
+    };
   }
 
   if (!parentRes.obj.entries.has(it.key)) {
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_TARGET",
       message: `no value at /${[...it.path, it.key].join("/")}`,
+      path: `/${[...it.path, it.key].join("/")}`,
     };
   }
 
@@ -385,7 +413,9 @@ function applyArrInsert(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_PARENT",
       message: `base array missing at /${it.path.join("/")}`,
+      path: `/${it.path.join("/")}`,
     };
   }
 
@@ -397,7 +427,9 @@ function applyArrInsert(
     return {
       ok: false,
       code: 409,
+      reason: "OUT_OF_BOUNDS",
       message: `index out of bounds at /${it.path.join("/")}/${it.index}`,
+      path: `/${it.path.join("/")}/${it.index}`,
     };
   }
 
@@ -451,7 +483,9 @@ function applyArrDelete(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_PARENT",
       message: `base array missing at /${it.path.join("/")}`,
+      path: `/${it.path.join("/")}`,
     };
   }
 
@@ -462,7 +496,9 @@ function applyArrDelete(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_TARGET",
       message: `no base element at index ${it.index}`,
+      path: `/${it.path.join("/")}/${it.index}`,
     };
   }
 
@@ -484,7 +520,9 @@ function applyArrReplace(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_PARENT",
       message: `base array missing at /${it.path.join("/")}`,
+      path: `/${it.path.join("/")}`,
     };
   }
 
@@ -495,7 +533,9 @@ function applyArrReplace(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_TARGET",
       message: `no base element at index ${it.index}`,
+      path: `/${it.path.join("/")}/${it.index}`,
     };
   }
 
@@ -505,7 +545,9 @@ function applyArrReplace(
     return {
       ok: false,
       code: 409,
+      reason: "MISSING_TARGET",
       message: `element already deleted at index ${it.index}`,
+      path: `/${it.path.join("/")}/${it.index}`,
     };
   }
 
@@ -569,50 +611,93 @@ export function applyIntentsToCrdt(
 
 /**
  * Convenience wrapper: compile a JSON Patch and apply it to a CRDT document.
- * @param base - The base document for index resolution.
- * @param head - The target document to mutate.
- * @param patch - Array of RFC 6902 JSON Patch operations.
- * @param newDot - A function that generates a unique `Dot` per mutation.
- * @param evalTestAgainst - Whether `test` ops evaluate against `"head"` or `"base"`.
- * @param bumpCounterAbove - Optional hook that can fast-forward the underlying counter before inserts.
- * @returns `{ ok: true }` on success, or `{ ok: false, code: 409, message }` on conflict.
+ * Overloads:
+ * - positional: `jsonPatchToCrdt(base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?)`
+ * - object: `jsonPatchToCrdt({ base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?, semantics? })`
  */
+export function jsonPatchToCrdt(options: JsonPatchToCrdtOptions): ApplyResult;
 export function jsonPatchToCrdt(
   base: Doc,
   head: Doc,
   patch: JsonPatchOp[],
   newDot: () => Dot,
+  evalTestAgainst?: "head" | "base",
+  bumpCounterAbove?: (ctr: number) => void,
+): ApplyResult;
+export function jsonPatchToCrdt(
+  baseOrOptions: Doc | JsonPatchToCrdtOptions,
+  head?: Doc,
+  patch?: JsonPatchOp[],
+  newDot?: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
 ): ApplyResult {
-  const baseJson = materialize(base.root);
-  const intents = compileJsonPatchToIntent(baseJson, patch);
+  if (isJsonPatchToCrdtOptions(baseOrOptions)) {
+    return jsonPatchToCrdtInternal(baseOrOptions);
+  }
 
-  return applyIntentsToCrdt(base, head, intents, newDot, evalTestAgainst, bumpCounterAbove);
+  if (!head || !patch || !newDot) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_PATCH",
+      message: "invalid jsonPatchToCrdt call signature",
+    };
+  }
+
+  return jsonPatchToCrdtInternal({
+    base: baseOrOptions,
+    head,
+    patch,
+    newDot,
+    evalTestAgainst,
+    bumpCounterAbove,
+  });
 }
 
 /**
- * Safe wrapper around `jsonPatchToCrdt` that converts compile-time errors into `409` results.
- * This function never throws for malformed/invalid patch paths.
+ * Safe wrapper around `jsonPatchToCrdt`.
+ * This function never throws and always returns an `ApplyResult`.
  */
+export function jsonPatchToCrdtSafe(options: JsonPatchToCrdtOptions): ApplyResult;
 export function jsonPatchToCrdtSafe(
   base: Doc,
   head: Doc,
   patch: JsonPatchOp[],
   newDot: () => Dot,
+  evalTestAgainst?: "head" | "base",
+  bumpCounterAbove?: (ctr: number) => void,
+): ApplyResult;
+export function jsonPatchToCrdtSafe(
+  baseOrOptions: Doc | JsonPatchToCrdtOptions,
+  head?: Doc,
+  patch?: JsonPatchOp[],
+  newDot?: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
 ): ApplyResult {
   try {
-    return jsonPatchToCrdt(base, head, patch, newDot, evalTestAgainst, bumpCounterAbove);
+    if (isJsonPatchToCrdtOptions(baseOrOptions)) {
+      return jsonPatchToCrdt(baseOrOptions);
+    }
+
+    if (!head || !patch || !newDot) {
+      return {
+        ok: false,
+        code: 409,
+        reason: "INVALID_PATCH",
+        message: "invalid jsonPatchToCrdtSafe call signature",
+      };
+    }
+
+    return jsonPatchToCrdt(baseOrOptions, head, patch, newDot, evalTestAgainst, bumpCounterAbove);
   } catch (error) {
-    return {
-      ok: false,
-      code: 409,
-      message: error instanceof Error ? error.message : "failed to compile patch",
-    };
+    return toApplyError(error);
   }
 }
+
+/** Alias for codebases that prefer `try*` naming for non-throwing APIs. */
+export const tryJsonPatchToCrdt = jsonPatchToCrdtSafe;
 
 /**
  * Generate a JSON Patch delta between two CRDT documents.
@@ -631,6 +716,123 @@ export function crdtToJsonPatch(base: Doc, head: Doc, options?: DiffOptions): Js
  */
 export function crdtToFullReplace(doc: Doc): JsonPatchOp[] {
   return [{ op: "replace", path: "", value: materialize(doc.root) }];
+}
+
+function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
+  const evalTestAgainst = options.evalTestAgainst ?? "head";
+  const semantics = options.semantics ?? "sequential";
+
+  if (semantics === "base") {
+    const baseJson = materialize(options.base.root);
+    let intents: IntentOp[];
+    try {
+      intents = compileJsonPatchToIntent(baseJson, options.patch, {
+        semantics: "base",
+      });
+    } catch (error) {
+      return toApplyError(error);
+    }
+
+    return applyIntentsToCrdt(
+      options.base,
+      options.head,
+      intents,
+      options.newDot,
+      evalTestAgainst,
+      options.bumpCounterAbove,
+    );
+  }
+
+  let shadowBase = cloneDoc(evalTestAgainst === "base" ? options.base : options.head);
+  let shadowCtr = 0;
+  const shadowDot = () => ({ actor: "__shadow__", ctr: ++shadowCtr });
+  const shadowBump = (ctr: number) => {
+    if (shadowCtr < ctr) {
+      shadowCtr = ctr;
+    }
+  };
+
+  for (let opIndex = 0; opIndex < options.patch.length; opIndex++) {
+    const op = options.patch[opIndex]!;
+    const baseJson = materialize(shadowBase.root);
+    let intents: IntentOp[];
+    try {
+      intents = compileJsonPatchToIntent(baseJson, [op], {
+        semantics: "sequential",
+      });
+    } catch (error) {
+      return withOpIndex(toApplyError(error), opIndex);
+    }
+
+    const headStep = applyIntentsToCrdt(
+      shadowBase,
+      options.head,
+      intents,
+      options.newDot,
+      evalTestAgainst,
+      options.bumpCounterAbove,
+    );
+    if (!headStep.ok) {
+      return withOpIndex(headStep, opIndex);
+    }
+
+    if (evalTestAgainst === "base") {
+      const shadowStep = applyIntentsToCrdt(
+        shadowBase,
+        shadowBase,
+        intents,
+        shadowDot,
+        "base",
+        shadowBump,
+      );
+      if (!shadowStep.ok) {
+        return withOpIndex(shadowStep, opIndex);
+      }
+    } else {
+      shadowBase = cloneDoc(options.head);
+    }
+  }
+
+  return { ok: true };
+}
+
+function withOpIndex(error: ApplyError, opIndex: number): ApplyError {
+  if (error.opIndex !== undefined) {
+    return error;
+  }
+
+  return { ...error, opIndex };
+}
+
+function isJsonPatchToCrdtOptions(value: unknown): value is JsonPatchToCrdtOptions {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "base" in value &&
+    "head" in value &&
+    "patch" in value &&
+    "newDot" in value
+  );
+}
+
+function toApplyError(error: unknown): ApplyError {
+  if (error instanceof PatchCompileError) {
+    return {
+      ok: false,
+      code: 409,
+      reason: error.reason,
+      message: error.message,
+      path: error.path,
+      opIndex: error.opIndex,
+    };
+  }
+
+  return {
+    ok: false,
+    code: 409,
+    reason: "INVALID_PATCH",
+    message: error instanceof Error ? error.message : "failed to compile/apply patch",
+  };
 }
 
 function assertNever(_value: never, message: string): never {
