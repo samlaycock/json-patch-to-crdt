@@ -1,10 +1,13 @@
 import { createClock, cloneClock } from "./clock";
 import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
 import { materialize } from "./materialize";
-import { compileJsonPatchToIntent, getAtJson, parseJsonPointer } from "./patch";
+import { PatchCompileError, compileJsonPatchToIntent, getAtJson, parseJsonPointer } from "./patch";
 import type {
+  ApplyError,
   ActorId,
   ApplyPatchAsActorResult,
+  ApplyPatchAsActorOptions,
+  ApplyPatchInPlaceOptions,
   ApplyPatchOptions,
   ApplyResult,
   CrdtState,
@@ -13,18 +16,40 @@ import type {
   JsonPatchOp,
   JsonValue,
   Node,
+  PatchErrorReason,
   PatchSemantics,
+  TryApplyPatchInPlaceResult,
+  TryApplyPatchResult,
+  ValidatePatchResult,
   VersionVector,
 } from "./types";
 
-/** Error thrown when a JSON Patch cannot be applied. Includes a numeric `.code` (409 for conflicts). */
+/** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
 export class PatchError extends Error {
-  readonly code: number;
+  readonly code: 409;
+  readonly reason: PatchErrorReason;
+  readonly path?: string;
+  readonly opIndex?: number;
 
-  constructor(message: string, code = 409) {
-    super(message);
+  constructor(error: ApplyError);
+  constructor(message: string, code?: 409, reason?: PatchErrorReason);
+  constructor(
+    errorOrMessage: ApplyError | string,
+    code: 409 = 409,
+    reason: PatchErrorReason = "INVALID_PATCH",
+  ) {
+    super(typeof errorOrMessage === "string" ? errorOrMessage : errorOrMessage.message);
     this.name = "PatchError";
-    this.code = code;
+    if (typeof errorOrMessage === "string") {
+      this.code = code;
+      this.reason = reason;
+      return;
+    }
+
+    this.code = errorOrMessage.code;
+    this.reason = errorOrMessage.reason;
+    this.path = errorOrMessage.path;
+    this.opIndex = errorOrMessage.opIndex;
   }
 }
 
@@ -41,6 +66,17 @@ export function createState(
   const clock = createClock(options.actor, options.start ?? 0);
   const doc = docFromJson(initial, clock.next);
   return { doc, clock };
+}
+
+/**
+ * Fork a replica from a shared origin state while assigning a new local actor ID.
+ * The forked state has an independent document clone and clock.
+ */
+export function forkState(origin: CrdtState, actor: ActorId): CrdtState {
+  return {
+    doc: cloneDoc(origin.doc),
+    clock: createClock(actor, origin.clock.ctr),
+  };
 }
 
 /**
@@ -61,7 +97,7 @@ export function toJson(target: Doc | CrdtState): JsonValue {
  * Throws `PatchError` on conflict (e.g. out-of-bounds index, failed test op).
  * @param state - The current CRDT state.
  * @param patch - Array of RFC 6902 JSON Patch operations.
- * @param options - Optional base document and test evaluation mode.
+ * @param options - Optional base state snapshot and patch semantics.
  * @returns A new `CrdtState` with the patch applied.
  */
 export function applyPatch(
@@ -69,18 +105,12 @@ export function applyPatch(
   patch: JsonPatchOp[],
   options: ApplyPatchOptions = {},
 ): CrdtState {
-  const nextState: CrdtState = {
-    doc: cloneDoc(state.doc),
-    clock: cloneClock(state.clock),
-  };
-
-  const result = applyPatchInternal(nextState, patch, options);
-
+  const result = tryApplyPatch(state, patch, options);
   if (!result.ok) {
-    throw new PatchError(result.message, result.code);
+    throw new PatchError(result.error);
   }
 
-  return nextState;
+  return result.state;
 }
 
 /**
@@ -88,25 +118,81 @@ export function applyPatch(
  * Throws `PatchError` on conflict.
  * @param state - The CRDT state to mutate.
  * @param patch - Array of RFC 6902 JSON Patch operations.
- * @param options - Optional base document and test evaluation mode.
+ * @param options - Optional base state snapshot, patch semantics, and atomicity.
  */
 export function applyPatchInPlace(
   state: CrdtState,
   patch: JsonPatchOp[],
-  options: ApplyPatchOptions = {},
+  options: ApplyPatchInPlaceOptions = {},
 ): void {
-  if (options.atomic ?? true) {
-    const next = applyPatch(state, patch, options);
-    state.doc = next.doc;
-    state.clock = next.clock;
-    return;
-  }
-
-  const result = applyPatchInternal(state, patch, options);
-
+  const result = tryApplyPatchInPlace(state, patch, options);
   if (!result.ok) {
-    throw new PatchError(result.message, result.code);
+    throw new PatchError(result.error);
   }
+}
+
+/** Non-throwing immutable patch application variant. */
+export function tryApplyPatch(
+  state: CrdtState,
+  patch: JsonPatchOp[],
+  options: ApplyPatchOptions = {},
+): TryApplyPatchResult {
+  const nextState: CrdtState = {
+    doc: cloneDoc(state.doc),
+    clock: cloneClock(state.clock),
+  };
+
+  const result = applyPatchInternal(nextState, patch, options);
+  if (!result.ok) {
+    return { ok: false, error: result };
+  }
+
+  return { ok: true, state: nextState };
+}
+
+/** Non-throwing in-place patch application variant. */
+export function tryApplyPatchInPlace(
+  state: CrdtState,
+  patch: JsonPatchOp[],
+  options: ApplyPatchInPlaceOptions = {},
+): TryApplyPatchInPlaceResult {
+  const { atomic = true, ...applyOptions } = options;
+
+  if (atomic) {
+    const next = tryApplyPatch(state, patch, applyOptions);
+    if (!next.ok) {
+      return next;
+    }
+
+    state.doc = next.state.doc;
+    state.clock = next.state.clock;
+    return { ok: true };
+  }
+
+  const result = applyPatchInternal(state, patch, applyOptions);
+  if (!result.ok) {
+    return { ok: false, error: result };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Validate whether a patch is applicable against a JSON base value under the chosen options.
+ * Does not mutate caller-provided values.
+ */
+export function validateJsonPatch(
+  base: JsonValue,
+  patch: JsonPatchOp[],
+  options: ApplyPatchOptions = {},
+): ValidatePatchResult {
+  const state = createState(base, { actor: "__validate__" });
+  const result = tryApplyPatch(state, patch, options);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  return { ok: true };
 }
 
 /**
@@ -118,7 +204,7 @@ export function applyPatchAsActor(
   vv: VersionVector,
   actor: ActorId,
   patch: JsonPatchOp[],
-  options: ApplyPatchOptions = {},
+  options: ApplyPatchAsActorOptions = {},
 ): ApplyPatchAsActorResult {
   const observedCtr = maxCtrInNodeForActor(doc.root, actor);
   const start = Math.max(vv[actor] ?? 0, observedCtr);
@@ -128,7 +214,7 @@ export function applyPatchAsActor(
     clock: createClock(actor, start),
   };
 
-  const state = applyPatch(baseState, patch, options);
+  const state = applyPatch(baseState, patch, toApplyPatchOptionsForActor(options));
   const nextVv: VersionVector = {
     ...vv,
     [actor]: Math.max(vv[actor] ?? 0, state.clock.ctr),
@@ -137,17 +223,30 @@ export function applyPatchAsActor(
   return { state, vv: nextVv };
 }
 
+function toApplyPatchOptionsForActor(options: ApplyPatchAsActorOptions): ApplyPatchOptions {
+  return {
+    semantics: options.semantics,
+    testAgainst: options.testAgainst,
+    base: options.base
+      ? {
+          doc: options.base,
+          clock: createClock("__base__", 0),
+        }
+      : undefined,
+  };
+}
+
 function applyPatchInternal(
   state: CrdtState,
   patch: JsonPatchOp[],
   options: ApplyPatchOptions,
 ): ApplyResult {
-  const semantics: PatchSemantics = options.semantics ?? "base";
+  const semantics: PatchSemantics = options.semantics ?? "sequential";
 
   if (semantics === "sequential") {
     const explicitBaseState: CrdtState | null = options.base
       ? {
-          doc: cloneDoc(options.base),
+          doc: cloneDoc(options.base.doc),
           clock: createClock("__base__", 0),
         }
       : null;
@@ -159,10 +258,10 @@ function applyPatchInternal(
         return step;
       }
 
-      if (explicitBaseState) {
+      if (explicitBaseState && op.op !== "test") {
         const baseStep = applyPatchInternal(explicitBaseState, [op], {
           semantics: "sequential",
-          testAgainst: options.testAgainst,
+          testAgainst: "base",
         });
         if (!baseStep.ok) {
           return baseStep;
@@ -173,9 +272,9 @@ function applyPatchInternal(
     return { ok: true };
   }
 
-  const baseDoc = options.base ? options.base : cloneDoc(state.doc);
+  const baseDoc = options.base ? options.base.doc : cloneDoc(state.doc);
   const baseJson = materialize(baseDoc.root);
-  const compiled = compileIntents(baseJson, patch);
+  const compiled = compileIntents(baseJson, patch, "base");
   if (!compiled.ok) {
     return compiled;
   }
@@ -250,7 +349,7 @@ function applySinglePatchOp(
   options: ApplyPatchOptions,
 ): ApplyResult {
   const baseJson = materialize(baseDoc.root);
-  const compiled = compileIntents(baseJson, [op]);
+  const compiled = compileIntents(baseJson, [op], "sequential");
   if (!compiled.ok) {
     return compiled;
   }
@@ -274,15 +373,17 @@ function bumpClockCounter(state: CrdtState, ctr: number): void {
 function compileIntents(
   baseJson: JsonValue,
   patch: JsonPatchOp[],
-): { ok: true; intents: IntentOp[] } | { ok: false; code: 409; message: string } {
+  semantics: PatchSemantics = "sequential",
+): { ok: true; intents: IntentOp[] } | ApplyError {
   try {
-    return { ok: true, intents: compileJsonPatchToIntent(baseJson, patch) };
-  } catch (error) {
     return {
-      ok: false,
-      code: 409,
-      message: error instanceof Error ? error.message : "failed to compile patch",
+      ok: true,
+      intents: compileJsonPatchToIntent(baseJson, patch, {
+        semantics,
+      }),
     };
+  } catch (error) {
+    return toApplyError(error);
   }
 }
 
@@ -327,4 +428,24 @@ function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
       return best;
     }
   }
+}
+
+function toApplyError(error: unknown): ApplyError {
+  if (error instanceof PatchCompileError) {
+    return {
+      ok: false,
+      code: 409,
+      reason: error.reason,
+      message: error.message,
+      path: error.path,
+      opIndex: error.opIndex,
+    };
+  }
+
+  return {
+    ok: false,
+    code: 409,
+    reason: "INVALID_PATCH",
+    message: error instanceof Error ? error.message : "failed to compile patch",
+  };
 }

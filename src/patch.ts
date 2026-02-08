@@ -1,5 +1,27 @@
 import { ROOT_KEY } from "./types";
-import type { DiffOptions, IntentOp, JsonPatchOp, JsonValue } from "./types";
+import type {
+  CompilePatchOptions,
+  DiffOptions,
+  IntentOp,
+  JsonPatchOp,
+  JsonValue,
+  PatchErrorReason,
+} from "./types";
+
+/** Structured compile error used to map patch validation failures to typed reasons. */
+export class PatchCompileError extends Error {
+  readonly reason: PatchErrorReason;
+  readonly path?: string;
+  readonly opIndex?: number;
+
+  constructor(reason: PatchErrorReason, message: string, path?: string, opIndex?: number) {
+    super(message);
+    this.name = "PatchCompileError";
+    this.reason = reason;
+    this.path = path;
+    this.opIndex = opIndex;
+  }
+}
 
 /**
  * Parse an RFC 6901 JSON Pointer into a path array, unescaping `~1` and `~0`.
@@ -72,99 +94,22 @@ export function getAtJson(base: JsonValue, path: string[]): JsonValue {
  * @param patch - Array of JSON Patch operations.
  * @returns An array of `IntentOp` ready for `applyIntentsToCrdt`.
  */
-export function compileJsonPatchToIntent(baseJson: JsonValue, patch: JsonPatchOp[]): IntentOp[] {
+export function compileJsonPatchToIntent(
+  baseJson: JsonValue,
+  patch: JsonPatchOp[],
+  options: CompilePatchOptions = {},
+): IntentOp[] {
+  const semantics = options.semantics ?? "sequential";
+  let workingBase: JsonValue = semantics === "sequential" ? structuredClone(baseJson) : baseJson;
   const intents: IntentOp[] = [];
 
-  for (const op of patch) {
-    if (op.op === "test") {
-      intents.push({
-        t: "Test",
-        path: parseJsonPointer(op.path),
-        value: op.value,
-      });
+  for (let opIndex = 0; opIndex < patch.length; opIndex++) {
+    const op = patch[opIndex]!;
+    const compileBase = semantics === "sequential" ? workingBase : baseJson;
+    intents.push(...compileSingleOp(compileBase, op, opIndex));
 
-      continue;
-    }
-
-    if (op.op === "copy" || op.op === "move") {
-      const fromPath = parseJsonPointer(op.from);
-      const val = getAtJson(baseJson, fromPath);
-
-      // copy/move becomes add + (optional) remove
-      intents.push(
-        ...compileJsonPatchToIntent(baseJson, [{ op: "add", path: op.path, value: val }]),
-      );
-
-      if (op.op === "move") {
-        intents.push(...compileJsonPatchToIntent(baseJson, [{ op: "remove", path: op.from }]));
-      }
-
-      continue;
-    }
-
-    const path = parseJsonPointer(op.path);
-    const parent = path.slice(0, -1);
-    const last = path[path.length - 1];
-
-    // Root replacement: treat as atomic set
-    if (path.length === 0) {
-      if (op.op === "replace" || op.op === "add") {
-        intents.push({ t: "ObjSet", path: [], key: ROOT_KEY, value: op.value });
-      } else if (op.op === "remove") {
-        // root remove -> set null (or reject). We'll set null.
-        intents.push({ t: "ObjSet", path: [], key: ROOT_KEY, value: null });
-      }
-
-      continue;
-    }
-
-    const isIndexLike = (s: string) => s === "-" || /^[0-9]+$/.test(s);
-
-    // If last segment is array index, compile as array intent
-    if (isIndexLike(last!)) {
-      const index = last === "-" ? Number.POSITIVE_INFINITY : Number(last);
-
-      if (op.op === "add") {
-        intents.push({ t: "ArrInsert", path: parent, index, value: op.value });
-      } else if (op.op === "remove") {
-        intents.push({ t: "ArrDelete", path: parent, index });
-      } else if (op.op === "replace") {
-        intents.push({ t: "ArrReplace", path: parent, index, value: op.value });
-      } else {
-        assertNever(op, "Unsupported op at array index path");
-      }
-    } else {
-      const parentValue = pathValueAt(baseJson, parent);
-      if (!isPlainObject(parentValue)) {
-        throw new Error(`Expected object parent at ${stringifyJsonPointer(parent)}`);
-      }
-
-      if ((op.op === "replace" || op.op === "remove") && !hasOwn(parentValue, last!)) {
-        throw new Error(`Missing key ${last} at ${stringifyJsonPointer(parent)}`);
-      }
-
-      // Object key
-      if (op.op === "add") {
-        intents.push({
-          t: "ObjSet",
-          path: parent,
-          key: last!,
-          value: op.value,
-          mode: "add",
-        });
-      } else if (op.op === "replace") {
-        intents.push({
-          t: "ObjSet",
-          path: parent,
-          key: last!,
-          value: op.value,
-          mode: "replace",
-        });
-      } else if (op.op === "remove") {
-        intents.push({ t: "ObjRemove", path: parent, key: last! });
-      } else {
-        assertNever(op, "Unsupported op");
-      }
+    if (semantics === "sequential") {
+      workingBase = applyPatchOpToJson(workingBase, op, opIndex);
     }
   }
 
@@ -382,7 +327,7 @@ export function jsonEquals(a: JsonValue, b: JsonValue): boolean {
   return true;
 }
 
-function isPlainObject(value: JsonValue): value is { [k: string]: JsonValue } {
+function isPlainObject(value: unknown): value is { [k: string]: JsonValue } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -400,4 +345,309 @@ function pathValueAt(base: JsonValue, path: string[]): JsonValue {
 
 function assertNever(_value: never, message: string): never {
   throw new Error(message);
+}
+
+function compileSingleOp(baseJson: JsonValue, op: JsonPatchOp, opIndex: number): IntentOp[] {
+  if (op.op === "test") {
+    return [
+      {
+        t: "Test",
+        path: parsePointerOrThrow(op.path, op.path, opIndex),
+        value: op.value,
+      },
+    ];
+  }
+
+  if (op.op === "copy" || op.op === "move") {
+    const fromPath = parsePointerOrThrow(op.from, op.from, opIndex);
+    const toPath = parsePointerOrThrow(op.path, op.path, opIndex);
+
+    if (op.op === "move" && isStrictDescendantPath(fromPath, toPath)) {
+      throw compileError(
+        "INVALID_MOVE",
+        `cannot move a value into one of its descendants at ${op.path}`,
+        op.path,
+        opIndex,
+      );
+    }
+
+    const val = lookupValueOrThrow(baseJson, fromPath, op.from, opIndex);
+    const out = compileSingleOp(baseJson, { op: "add", path: op.path, value: val }, opIndex);
+
+    if (op.op === "move") {
+      out.push(...compileSingleOp(baseJson, { op: "remove", path: op.from }, opIndex));
+    }
+
+    return out;
+  }
+
+  const path = parsePointerOrThrow(op.path, op.path, opIndex);
+
+  // Root replacement: treat as atomic set.
+  if (path.length === 0) {
+    if (op.op === "replace" || op.op === "add") {
+      return [{ t: "ObjSet", path: [], key: ROOT_KEY, value: op.value }];
+    }
+
+    throw compileError(
+      "INVALID_TARGET",
+      "remove at root path is not supported in RFC-compliant mode",
+      op.path,
+      opIndex,
+    );
+  }
+
+  const parent = path.slice(0, -1);
+  const token = path[path.length - 1]!;
+  const parentPath = stringifyJsonPointer(parent);
+
+  const parentValue = getParentValue(baseJson, parent, opIndex);
+
+  if (Array.isArray(parentValue)) {
+    const index = parseArrayIndexToken(token, op.op, parentValue.length, op.path, opIndex);
+
+    if (op.op === "add") {
+      return [{ t: "ArrInsert", path: parent, index, value: op.value }];
+    }
+
+    if (op.op === "remove") {
+      return [{ t: "ArrDelete", path: parent, index }];
+    }
+
+    if (op.op === "replace") {
+      return [{ t: "ArrReplace", path: parent, index, value: op.value }];
+    }
+
+    return assertNever(op, "Unsupported op at array path");
+  }
+
+  if (!isPlainObject(parentValue)) {
+    throw compileError(
+      "INVALID_TARGET",
+      `expected object or array parent at ${parentPath}`,
+      parentPath,
+      opIndex,
+    );
+  }
+
+  if ((op.op === "replace" || op.op === "remove") && !hasOwn(parentValue, token)) {
+    throw compileError("MISSING_TARGET", `missing key ${token} at ${parentPath}`, op.path, opIndex);
+  }
+
+  if (op.op === "add") {
+    return [{ t: "ObjSet", path: parent, key: token, value: op.value, mode: "add" }];
+  }
+
+  if (op.op === "replace") {
+    return [{ t: "ObjSet", path: parent, key: token, value: op.value, mode: "replace" }];
+  }
+
+  if (op.op === "remove") {
+    return [{ t: "ObjRemove", path: parent, key: token }];
+  }
+
+  return assertNever(op, "Unsupported op");
+}
+
+function applyPatchOpToJson(baseJson: JsonValue, op: JsonPatchOp, opIndex: number): JsonValue {
+  let doc = structuredClone(baseJson) as JsonValue;
+
+  if (op.op === "test") {
+    return doc;
+  }
+
+  if (op.op === "copy" || op.op === "move") {
+    const fromPath = parsePointerOrThrow(op.from, op.from, opIndex);
+    const value = structuredClone(lookupValueOrThrow(doc, fromPath, op.from, opIndex));
+    if (op.op === "move") {
+      doc = applyPatchOpToJson(doc, { op: "remove", path: op.from }, opIndex);
+    }
+    return applyPatchOpToJson(doc, { op: "add", path: op.path, value }, opIndex);
+  }
+
+  const path = parsePointerOrThrow(op.path, op.path, opIndex);
+  if (path.length === 0) {
+    if (op.op === "add" || op.op === "replace") {
+      return structuredClone(op.value);
+    }
+
+    throw compileError(
+      "INVALID_TARGET",
+      "remove at root path is not supported in RFC-compliant mode",
+      op.path,
+      opIndex,
+    );
+  }
+
+  const parentPath = path.slice(0, -1);
+  const token = path[path.length - 1]!;
+  let parent: JsonValue;
+  if (parentPath.length === 0) {
+    parent = doc;
+  } else {
+    parent = lookupValueOrThrow(doc, parentPath, op.path, opIndex);
+  }
+
+  if (Array.isArray(parent)) {
+    const index = parseArrayIndexToken(token, op.op, parent.length, op.path, opIndex);
+    if (op.op === "add") {
+      const insertAt = index === Number.POSITIVE_INFINITY ? parent.length : index;
+      parent.splice(insertAt, 0, structuredClone(op.value));
+      return doc;
+    }
+
+    if (op.op === "replace") {
+      parent[index] = structuredClone(op.value);
+      return doc;
+    }
+
+    parent.splice(index, 1);
+    return doc;
+  }
+
+  if (!isPlainObject(parent)) {
+    throw compileError(
+      "INVALID_TARGET",
+      `expected object or array parent at ${stringifyJsonPointer(parentPath)}`,
+      op.path,
+      opIndex,
+    );
+  }
+
+  if (op.op === "add" || op.op === "replace") {
+    parent[token] = structuredClone(op.value);
+    return doc;
+  }
+
+  delete parent[token];
+  return doc;
+}
+
+function parsePointerOrThrow(ptr: string, path: string, opIndex: number): string[] {
+  try {
+    return parseJsonPointer(ptr);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid pointer";
+    throw compileError("INVALID_POINTER", message, path, opIndex);
+  }
+}
+
+function lookupValueOrThrow(
+  baseJson: JsonValue,
+  path: string[],
+  pointer: string,
+  opIndex: number,
+): JsonValue {
+  try {
+    return getAtJson(baseJson, path);
+  } catch (error) {
+    throw compileErrorFromLookup(error, pointer, opIndex);
+  }
+}
+
+function getParentValue(baseJson: JsonValue, parent: string[], opIndex: number): JsonValue {
+  if (parent.length === 0) {
+    return baseJson;
+  }
+
+  try {
+    return pathValueAt(baseJson, parent);
+  } catch (error) {
+    throw compileErrorFromLookup(error, stringifyJsonPointer(parent), opIndex);
+  }
+}
+
+function parseArrayIndexToken(
+  token: string,
+  op: "add" | "remove" | "replace",
+  arrLength: number,
+  path: string,
+  opIndex: number,
+): number {
+  if (token === "-") {
+    if (op !== "add") {
+      throw compileError(
+        "INVALID_POINTER",
+        `'-' index is only valid for add at ${path}`,
+        path,
+        opIndex,
+      );
+    }
+
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (!/^[0-9]+$/.test(token)) {
+    throw compileError("INVALID_POINTER", `expected array index at ${path}`, path, opIndex);
+  }
+
+  const index = Number(token);
+  if (!Number.isSafeInteger(index)) {
+    throw compileError("OUT_OF_BOUNDS", `array index is too large at ${path}`, path, opIndex);
+  }
+
+  if (op === "add") {
+    if (index > arrLength) {
+      throw compileError(
+        "OUT_OF_BOUNDS",
+        `index out of bounds at ${path}; expected 0..${arrLength}`,
+        path,
+        opIndex,
+      );
+    }
+  } else if (index >= arrLength) {
+    throw compileError(
+      "OUT_OF_BOUNDS",
+      `index out of bounds at ${path}; expected 0..${Math.max(arrLength - 1, 0)}`,
+      path,
+      opIndex,
+    );
+  }
+
+  return index;
+}
+
+function compileErrorFromLookup(error: unknown, path: string, opIndex: number): PatchCompileError {
+  const message = error instanceof Error ? error.message : "invalid path";
+
+  if (message.includes("Expected array index")) {
+    return compileError("INVALID_POINTER", message, path, opIndex);
+  }
+
+  if (message.includes("Index out of bounds")) {
+    return compileError("OUT_OF_BOUNDS", message, path, opIndex);
+  }
+
+  if (message.includes("Missing key")) {
+    return compileError("MISSING_PARENT", message, path, opIndex);
+  }
+
+  if (message.includes("Cannot traverse into non-container")) {
+    return compileError("INVALID_TARGET", message, path, opIndex);
+  }
+
+  return compileError("INVALID_PATCH", message, path, opIndex);
+}
+
+function compileError(
+  reason: PatchErrorReason,
+  message: string,
+  path: string,
+  opIndex: number,
+): PatchCompileError {
+  return new PatchCompileError(reason, message, path, opIndex);
+}
+
+function isStrictDescendantPath(from: string[], to: string[]): boolean {
+  if (to.length <= from.length) {
+    return false;
+  }
+
+  for (let i = 0; i < from.length; i++) {
+    if (from[i] !== to[i]) {
+      return false;
+    }
+  }
+
+  return true;
 }

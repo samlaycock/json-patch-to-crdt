@@ -58,28 +58,14 @@ try {
 Two peers can start from a shared state, apply patches independently, and merge:
 
 ```ts
-import {
-  applyPatch,
-  cloneDoc,
-  createClock,
-  createState,
-  mergeState,
-  toJson,
-  type CrdtState,
-} from "json-patch-to-crdt";
+import { applyPatch, createState, forkState, mergeState, toJson } from "json-patch-to-crdt";
 
 // Both peers start from the same origin state.
 const origin = createState({ count: 0, items: ["a"] }, { actor: "origin" });
 
-// Each peer gets a clone of the document with its own clock.
-const peerA: CrdtState = {
-  doc: cloneDoc(origin.doc),
-  clock: createClock("A", origin.clock.ctr),
-};
-const peerB: CrdtState = {
-  doc: cloneDoc(origin.doc),
-  clock: createClock("B", origin.clock.ctr),
-};
+// Fork shared-origin replicas with local actor identities.
+const peerA = forkState(origin, "A");
+const peerB = forkState(origin, "B");
 
 // Peers diverge with independent edits.
 const a1 = applyPatch(peerA, [
@@ -112,9 +98,9 @@ console.log(toJson(converged));
 
 ## Concepts
 
-- **Doc**: CRDT document node graph.
-- **State**: `{ doc, clock }`, where `clock` yields new dots.
-- **Base snapshot**: explicit JSON or CRDT doc used to interpret array indices and compute deltas.
+- **Doc**: CRDT document node graph (primarily an internals concept).
+- **State**: `{ doc, clock }`, used by the main API.
+- **Base snapshot**: for `applyPatch`, pass a prior `CrdtState`; internals APIs may use raw `Doc` snapshots.
 
 ## Ordered Event Log Server Pattern
 
@@ -126,7 +112,7 @@ If your service contract is "JSON Patch in / JSON Patch out", and your backend k
 - Append the accepted event to your ordered log.
 - For downstream clients, emit `crdtToJsonPatch(clientBaseDoc, currentHeadDoc)`.
 
-Minimal shape:
+Minimal shape (advanced API via `json-patch-to-crdt/internals`):
 
 ```ts
 import {
@@ -137,7 +123,7 @@ import {
   type Doc,
   type JsonPatchOp,
   type VersionVector,
-} from "json-patch-to-crdt";
+} from "json-patch-to-crdt/internals";
 
 let head: Doc = createState({ list: [] }, { actor: "server" }).doc;
 let vv: VersionVector = {};
@@ -165,24 +151,23 @@ function applyIncomingPatch(
 }
 ```
 
-If you prefer a non-throwing low-level compile+apply path, use `jsonPatchToCrdtSafe`.
+If you prefer a non-throwing low-level compile+apply path, use `jsonPatchToCrdtSafe` from `json-patch-to-crdt/internals`.
 
 ## Patch Semantics
 
 - Patches are interpreted relative to a base snapshot.
-- `applyPatch` defaults to a safe snapshot of the current state as its base.
-- You can pass an explicit base doc via `applyPatch(state, patch, { base })`.
-- Patch semantics are configurable: `semantics: "base"` (default) or `"sequential"`.
+- `applyPatch` defaults to RFC-style sequential patch execution.
+- You can pass an explicit base state via `applyPatch(state, patch, { base })`.
+- Patch semantics are configurable: `semantics: "sequential"` (default) or `"base"`.
 - In `sequential` mode with an explicit `base`, operations are interpreted against a rolling base snapshot while being applied step-by-step to the evolving head.
 - Array indexes are mapped to element IDs based on the base snapshot.
 - `"-"` is treated as append for array inserts.
-- Missing arrays in the base snapshot only allow inserts at index `0` or `"-"`; other indexes throw a `PatchError` with code `409`.
 - `test` operations can be evaluated against `head` or `base` using the `testAgainst` option.
 
 ### Semantics Modes
 
-- `semantics: "base"` (default): interprets the full patch relative to one fixed snapshot.
-- `semantics: "sequential"`: applies operations one-by-one against the evolving head (closest to RFC 6902 execution style).
+- `semantics: "sequential"` (default): applies operations one-by-one against the evolving head (RFC-like execution).
+- `semantics: "base"`: interprets the full patch relative to one fixed snapshot.
 
 #### Which Mode Should You Use?
 
@@ -206,15 +191,7 @@ const sequentialMode = applyPatch(state, [{ op: "add", path: "/list/0", value: "
 
 ## Delta Patches (First-Class)
 
-If you want a JSON Patch delta, you must provide a base snapshot. This is a first-class API:
-
-```ts
-import { crdtToJsonPatch } from "json-patch-to-crdt";
-
-const delta = crdtToJsonPatch(baseDoc, headDoc);
-```
-
-You can also diff JSON directly:
+For most applications, diff JSON values directly:
 
 ```ts
 import { diffJsonPatch } from "json-patch-to-crdt";
@@ -222,10 +199,18 @@ import { diffJsonPatch } from "json-patch-to-crdt";
 const delta = diffJsonPatch(baseJson, nextJson);
 ```
 
-If you need a full-state root `replace` patch (no delta), use `crdtToFullReplace`:
+If you already keep CRDT documents and need doc-level deltas, use the internals entry point:
 
 ```ts
-import { crdtToFullReplace } from "json-patch-to-crdt";
+import { crdtToJsonPatch } from "json-patch-to-crdt/internals";
+
+const delta = crdtToJsonPatch(baseDoc, headDoc);
+```
+
+If you need a full-state root `replace` patch (no delta), use internals:
+
+```ts
+import { crdtToFullReplace } from "json-patch-to-crdt/internals";
 
 const fullPatch = crdtToFullReplace(doc);
 // [{ op: "replace", path: "", value: { ... } }]
@@ -238,7 +223,7 @@ By default, arrays are diffed with deterministic LCS edits.
 If you want atomic array replacement, pass `{ arrayStrategy: "atomic" }`:
 
 ```ts
-const delta = crdtToJsonPatch(baseDoc, headDoc, { arrayStrategy: "atomic" });
+const delta = diffJsonPatch(baseJson, nextJson, { arrayStrategy: "atomic" });
 ```
 
 Notes:
@@ -248,22 +233,23 @@ Notes:
 
 ## Merging
 
-Merge two divergent CRDT documents or states:
+Merge full states:
 
 ```ts
-import { mergeDoc, mergeState } from "json-patch-to-crdt";
-
-// Merge documents (low-level):
-const mergedDoc = mergeDoc(docA, docB);
+import { mergeState } from "json-patch-to-crdt";
 
 // Merge full states (preserve local actor identity):
 const mergedState = mergeState(stateA, stateB, { actor: "A" });
 ```
 
+If you need low-level document-only merging, use `mergeDoc` from `json-patch-to-crdt/internals`.
+
 By default, merge checks that non-empty arrays share lineage (common element IDs).
 If you intentionally need best-effort merging of unrelated array histories, disable this guard:
 
 ```ts
+import { mergeDoc } from "json-patch-to-crdt/internals";
+
 const mergedDoc = mergeDoc(docA, docB, { requireSharedOrigin: false });
 ```
 
@@ -314,67 +300,69 @@ try {
   const next = applyPatch(state, patch);
 } catch (err) {
   if (err instanceof PatchError) {
-    console.error(err.code, err.message);
+    console.error(err.code, err.reason, err.message);
   }
 }
 ```
 
-Low-level APIs (`applyIntentsToCrdt`, `jsonPatchToCrdt`) return `{ ok: false, code: 409, message }` for apply-time conflicts.
-Compile-time patch issues (invalid pointers, missing object parents/targets) throw errors unless you use `jsonPatchToCrdtSafe`.
+Non-throwing APIs (`tryApplyPatch`, `tryApplyPatchInPlace`, `tryMergeState`) return structured conflicts.
+Internals helpers like `jsonPatchToCrdtSafe` and `tryMergeDoc` return the same shape:
+
+- `{ ok: false, code: 409, reason, message, path?, opIndex? }`
 
 ## API Summary
 
 ### State helpers
 
 - `createState(initial, { actor, start? })` - Create a new CRDT state from JSON.
-- `applyPatch(state, patch, options?)` - Apply a patch immutably, returning a new state (`semantics: "base"` by default).
-- `applyPatchInPlace(state, patch, options?)` - Apply a patch by mutating state in place (atomic by default, `atomic: false` for legacy behavior).
-- `applyPatchAsActor(doc, vv, actor, patch, options?)` - Apply a patch for a server-tracked actor and return updated `{ state, vv }`.
+- `forkState(origin, actor)` - Fork a shared-origin replica with a new local actor ID.
+- `applyPatch(state, patch, options?)` - Apply a patch immutably, returning a new state (`semantics: "sequential"` by default).
+- `applyPatchInPlace(state, patch, options?)` - Apply a patch by mutating state in place (`atomic: true` by default).
+- `tryApplyPatch(state, patch, options?)` - Non-throwing immutable apply (`{ ok: true, state }` or `{ ok: false, error }`).
+- `tryApplyPatchInPlace(state, patch, options?)` - Non-throwing in-place apply result.
+- `validateJsonPatch(baseJson, patch, options?)` - Preflight patch validation (non-mutating).
 - `toJson(docOrState)` - Materialize a JSON value from a doc or state.
-- `PatchError` - Error class thrown for failed patches (code `409`).
-
-### Clock helpers
-
-- `createClock(actor, start?)` - Create a new clock for dot generation.
-- `cloneClock(clock)` - Clone a clock independently.
-- `nextDotForActor(vv, actor)` - Generate a dot for any actor from a shared version-vector map.
-- `observeDot(vv, dot)` - Record observed dots into that map.
-
-### Document helpers
-
-- `docFromJson(value, nextDot)` - Create a CRDT doc using fresh dots per node.
-- `cloneDoc(doc)` - Deep-clone a document.
-- `materialize(node)` - Convert a CRDT node to a JSON value.
+- `applyPatch`/`tryApplyPatch` options: `base` expects a prior `CrdtState` snapshot (not a raw doc), plus `semantics` and `testAgainst`.
+- `PatchError` - Error class thrown for failed patches (`code`, `reason`, `message`, optional `path`/`opIndex`).
 
 ### Merge helpers
 
-- `mergeDoc(a, b, options?)` - Merge two CRDT documents (`options.requireSharedOrigin` defaults to `true`).
 - `mergeState(a, b, options?)` - Merge two CRDT states (doc + clock), preserving actor identity (`options.actor`) and optional shared-origin checks.
+- `tryMergeState(a, b, options?)` - Non-throwing merge-state result.
+- `MergeError` - Error class thrown by throwing merge helpers.
 
 ### Patch helpers
 
-- `compileJsonPatchToIntent(baseJson, patch)` - Compile JSON Patch to intent operations.
-- `applyIntentsToCrdt(base, head, intents, newDot, evalTestAgainst?, bumpCounterAbove?)` - Apply intents to a document.
-- `jsonPatchToCrdt(base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?)` - Compile and apply in one step.
-- `jsonPatchToCrdtSafe(base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?)` - Safe compile+apply wrapper that returns `409` results instead of throwing on compile-time patch issues.
 - `diffJsonPatch(baseJson, nextJson, options?)` - Compute a JSON Patch delta between two JSON values.
-- `crdtToJsonPatch(baseDoc, headDoc, options?)` - Compute a JSON Patch delta between two CRDT docs.
-- `crdtToFullReplace(doc)` - Emit a full-state root `replace` patch.
 
 ### Serialization
 
-- `serializeDoc(doc)` / `deserializeDoc(payload)` - Serialize/restore a document.
 - `serializeState(state)` / `deserializeState(payload)` - Serialize/restore a full state.
 
 ### Internals (`json-patch-to-crdt/internals`)
 
-Low-level helpers are available via a separate entry point for advanced use:
+Advanced helpers are available via a separate entry point:
 
 ```ts
-import { compareDot, rgaInsertAfter, objSet, HEAD } from "json-patch-to-crdt/internals";
+import {
+  applyPatchAsActor,
+  createClock,
+  docFromJson,
+  mergeDoc,
+  jsonPatchToCrdtSafe,
+  compareDot,
+  rgaInsertAfter,
+  HEAD,
+} from "json-patch-to-crdt/internals";
 ```
 
-This includes: `compareDot`, `vvHasDot`, `vvMerge`, `dotToElemId`, `newObj`, `newSeq`, `newReg`, `lwwSet`, `objSet`, `objRemove`, `HEAD`, `rgaInsertAfter`, `rgaDelete`, `rgaLinearizeIds`, `rgaPrevForInsertAtIndex`, `rgaIdAtIndex`, `docFromJsonWithDot`.
+Internals includes low-level helpers such as:
+
+- Actor/version-vector helpers: `applyPatchAsActor`, `createClock`, `cloneClock`, `nextDotForActor`, `observeDot`.
+- Doc-level APIs: `docFromJson`, `docFromJsonWithDot`, `cloneDoc`, `materialize`, `mergeDoc`, `tryMergeDoc`.
+- Intent compiler/apply pipeline: `compileJsonPatchToIntent`, `applyIntentsToCrdt`, `jsonPatchToCrdt`, `jsonPatchToCrdtSafe`, `tryJsonPatchToCrdt`.
+- Doc delta/serialization helpers: `crdtToJsonPatch`, `crdtToFullReplace`, `serializeDoc`, `deserializeDoc`.
+- CRDT primitives/utilities: `compareDot`, `vvHasDot`, `vvMerge`, `dotToElemId`, `newObj`, `newSeq`, `newReg`, `lwwSet`, `objSet`, `objRemove`, `HEAD`, `rgaInsertAfter`, `rgaDelete`, `rgaLinearizeIds`, `rgaPrevForInsertAtIndex`, `rgaIdAtIndex`.
 
 ## Determinism
 
@@ -392,10 +380,10 @@ This typically means the patch could not be applied against the base snapshot. C
 - Base array missing for a non-append insert.
 
 **How do I avoid `409` for arrays?**
-Always pass a base snapshot that matches the array you are patching. If the array may be missing, only insert at index `0` or `"-"` (append) to allow auto-creation.
+Always pass a base state snapshot that matches the array you are patching. If the array may be missing, create the parent path explicitly before inserting into it.
 
 **How do I get a full-state patch instead of a delta?**
-Use `crdtToFullReplace(doc)` which emits a single root `replace` patch.
+Use `crdtToFullReplace(doc)` from `json-patch-to-crdt/internals`, which emits a single root `replace` patch.
 
 **Why do array deltas look bigger than expected?**
 LCS diffs are deterministic, not minimal. If you prefer one-op array replacement, use `{ arrayStrategy: "atomic" }`.
@@ -404,7 +392,7 @@ LCS diffs are deterministic, not minimal. If you prefer one-op array replacement
 No. It is deterministic and usually compact, but not guaranteed to be minimal.
 
 **How do I merge states from two peers?**
-Use `mergeState(local, remote, { actor: localActorId })`. Both peers should start from a shared origin state (same document, different clocks), and each peer should keep its own unique actor ID across merges. See the [Multi-Peer Sync](#multi-peer-sync) example above.
+Use `forkState(origin, actor)` to create each peer from the same origin, then `mergeState(local, remote, { actor: localActorId })`. Each peer should keep a stable unique actor ID across merges. See the [Multi-Peer Sync](#multi-peer-sync) example above.
 
 **Why can my local counter jump after a merge?**
 Array inserts that target an existing predecessor may need to outrank sibling insert dots for deterministic ordering. The library can fast-forward the local counter in constant time to avoid expensive loops, but the resulting counter value may still jump upward when merging with peers that already have high counters.

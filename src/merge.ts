@@ -1,6 +1,7 @@
 import { compareDot } from "./dot";
 import { createClock } from "./clock";
 import type {
+  ApplyError,
   ActorId,
   CrdtState,
   Doc,
@@ -12,7 +13,24 @@ import type {
   ObjNode,
   RgaElem,
   RgaSeq,
+  TryMergeDocResult,
+  TryMergeStateResult,
 } from "./types";
+
+/** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
+export class MergeError extends Error {
+  readonly code: 409;
+  readonly reason: "LINEAGE_MISMATCH";
+  readonly path?: string;
+
+  constructor(error: ApplyError) {
+    super(error.message);
+    this.name = "MergeError";
+    this.code = error.code;
+    this.reason = "LINEAGE_MISMATCH";
+    this.path = error.path;
+  }
+}
 
 /**
  * Merge two CRDT documents from different peers into one.
@@ -28,13 +46,32 @@ import type {
  * - **Kind mismatch**: the node with the higher "representative dot" wins and replaces the other entirely.
  */
 export function mergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): Doc {
+  const result = tryMergeDoc(a, b, options);
+  if (!result.ok) {
+    throw new MergeError(result.error);
+  }
+
+  return result.doc;
+}
+
+/** Non-throwing `mergeDoc` variant with structured conflict details. */
+export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryMergeDocResult {
   const requireSharedOrigin = options.requireSharedOrigin ?? true;
   const mismatchPath = requireSharedOrigin ? findSeqLineageMismatch(a.root, b.root, []) : null;
   if (mismatchPath) {
-    throw new Error(`merge requires shared array origin at ${mismatchPath}`);
+    return {
+      ok: false,
+      error: {
+        ok: false,
+        code: 409,
+        reason: "LINEAGE_MISMATCH",
+        message: `merge requires shared array origin at ${mismatchPath}`,
+        path: mismatchPath,
+      },
+    };
   }
 
-  return { root: mergeNode(a.root, b.root) };
+  return { ok: true, doc: { root: mergeNode(a.root, b.root) } };
 }
 
 /**
@@ -49,12 +86,31 @@ export function mergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): Doc {
  * that actor across both input clocks and the merged document dots.
  */
 export function mergeState(a: CrdtState, b: CrdtState, options: MergeStateOptions = {}): CrdtState {
-  const doc = mergeDoc(a.doc, b.doc, {
+  const result = tryMergeState(a, b, options);
+  if (!result.ok) {
+    throw new MergeError(result.error);
+  }
+
+  return result.state;
+}
+
+/** Non-throwing `mergeState` variant with structured conflict details. */
+export function tryMergeState(
+  a: CrdtState,
+  b: CrdtState,
+  options: MergeStateOptions = {},
+): TryMergeStateResult {
+  const mergedDoc = tryMergeDoc(a.doc, b.doc, {
     requireSharedOrigin: options.requireSharedOrigin,
   });
+  if (!mergedDoc.ok) {
+    return mergedDoc;
+  }
+
+  const doc = mergedDoc.doc;
   const actor = options.actor ?? a.clock.actor;
   const ctr = maxObservedCtrForActor(doc, actor, a, b);
-  return { doc, clock: createClock(actor, ctr) };
+  return { ok: true, state: { doc, clock: createClock(actor, ctr) } };
 }
 
 function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null {
