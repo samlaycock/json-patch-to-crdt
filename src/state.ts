@@ -1,7 +1,13 @@
 import { createClock, cloneClock } from "./clock";
 import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
 import { materialize } from "./materialize";
-import { PatchCompileError, compileJsonPatchToIntent, getAtJson, parseJsonPointer } from "./patch";
+import {
+  PatchCompileError,
+  compileJsonPatchToIntent,
+  getAtJson,
+  mapLookupErrorToPatchReason,
+  parseJsonPointer,
+} from "./patch";
 import type {
   ApplyError,
   ActorId,
@@ -495,57 +501,13 @@ function toPointerParseApplyError(error: unknown, pointer: string, opIndex: numb
 }
 
 function toPointerLookupApplyError(error: unknown, pointer: string, opIndex: number): ApplyError {
-  const message = error instanceof Error ? error.message : "invalid path";
-
-  if (message.includes("Expected array index")) {
-    return {
-      ok: false,
-      code: 409,
-      reason: "INVALID_POINTER",
-      message,
-      path: pointer,
-      opIndex,
-    };
-  }
-
-  if (message.includes("Index out of bounds")) {
-    return {
-      ok: false,
-      code: 409,
-      reason: "OUT_OF_BOUNDS",
-      message,
-      path: pointer,
-      opIndex,
-    };
-  }
-
-  if (message.includes("Missing key")) {
-    return {
-      ok: false,
-      code: 409,
-      reason: "MISSING_PARENT",
-      message,
-      path: pointer,
-      opIndex,
-    };
-  }
-
-  if (message.includes("Cannot traverse into non-container")) {
-    return {
-      ok: false,
-      code: 409,
-      reason: "INVALID_TARGET",
-      message,
-      path: pointer,
-      opIndex,
-    };
-  }
+  const mapped = mapLookupErrorToPatchReason(error);
 
   return {
     ok: false,
     code: 409,
-    reason: "INVALID_PATCH",
-    message,
+    reason: mapped.reason,
+    message: mapped.message,
     path: pointer,
     opIndex,
   };
