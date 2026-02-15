@@ -18,6 +18,7 @@ import type {
   ApplyResult,
   CrdtState,
   Doc,
+  ForkStateOptions,
   IntentOp,
   JsonPatchOp,
   JsonValue,
@@ -77,8 +78,17 @@ export function createState(
 /**
  * Fork a replica from a shared origin state while assigning a new local actor ID.
  * The forked state has an independent document clone and clock.
+ * By default this rejects actor reuse to prevent duplicate-dot collisions across peers.
  */
-export function forkState(origin: CrdtState, actor: ActorId): CrdtState {
+export function forkState(
+  origin: CrdtState,
+  actor: ActorId,
+  options: ForkStateOptions = {},
+): CrdtState {
+  if (actor === origin.clock.actor && !options.allowActorReuse) {
+    throw new Error(`forkState actor must be unique; refusing to reuse origin actor '${actor}'`);
+  }
+
   return {
     doc: cloneDoc(origin.doc),
     clock: createClock(actor, origin.clock.ctr),

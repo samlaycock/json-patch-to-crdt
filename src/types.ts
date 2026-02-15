@@ -144,6 +144,15 @@ export type Doc = { root: Node };
 /** Combined CRDT state: a document and its associated clock. */
 export type CrdtState = { doc: Doc; clock: Clock };
 
+/** Options for `forkState`. */
+export interface ForkStateOptions {
+  /**
+   * Allow reusing the origin actor ID when forking.
+   * Defaults to `false` to prevent duplicate-dot collisions across replicas.
+   */
+  allowActorReuse?: boolean;
+}
+
 /** Result from applying a patch for a specific actor using a shared version vector. */
 export type ApplyPatchAsActorResult = {
   /** Updated CRDT state for the actor that produced this patch. */
