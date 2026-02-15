@@ -1,6 +1,6 @@
 {
   "name": "json-patch-to-crdt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Convert JSON Patch (RFC 6902) to and from a CRDT-friendly representation.",
   "keywords": [
     "crdt",
