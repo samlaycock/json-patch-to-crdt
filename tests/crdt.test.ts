@@ -1158,8 +1158,8 @@ describe("compileJsonPatchToIntent", () => {
     const intents = compileJsonPatchToIntent(base, patch);
     expect(intents).toEqual([
       { t: "ObjSet", path: [], key: "c", value: 1, mode: "add" },
-      { t: "ObjSet", path: [], key: "d", value: 2, mode: "add" },
       { t: "ObjRemove", path: [], key: "b" },
+      { t: "ObjSet", path: [], key: "d", value: 2, mode: "add" },
     ]);
   });
 
@@ -1196,9 +1196,16 @@ describe("compileJsonPatchToIntent", () => {
     const patch: JsonPatchOp[] = [{ op: "move", from: "/list/1", path: "/list/0" }];
 
     expect(compileJsonPatchToIntent(base, patch)).toEqual([
-      { t: "ArrInsert", path: ["list"], index: 0, value: "b" },
       { t: "ArrDelete", path: ["list"], index: 1 },
+      { t: "ArrInsert", path: ["list"], index: 0, value: "b" },
     ]);
+  });
+
+  it("compiles self-move as a no-op in sequential semantics", () => {
+    const base: JsonValue = { a: 1 };
+    const patch: JsonPatchOp[] = [{ op: "move", from: "/a", path: "/a" }];
+
+    expect(compileJsonPatchToIntent(base, patch)).toEqual([]);
   });
 
   it("throws on invalid JSON pointer", () => {
@@ -1711,6 +1718,47 @@ describe("jsonPatchToCrdt", () => {
     const res = jsonPatchToCrdt(baseDoc, headDoc, patch, newDotGen("A", 1));
     expect(res).toEqual({ ok: true });
     expect(materialize(headDoc.root)).toEqual({ a: 1, c: 1, d: 2 });
+  });
+
+  it("applies forward array move with RFC ordering semantics", () => {
+    const baseJson: JsonValue = { list: ["a", "b", "c"] };
+    const baseDoc = docFromJsonWithDot(baseJson, dot("A", 0));
+    const headDoc = cloneDoc(baseDoc);
+    const patch: JsonPatchOp[] = [{ op: "move", from: "/list/0", path: "/list/2" }];
+
+    const res = jsonPatchToCrdt(baseDoc, headDoc, patch, newDotGen("A", 1));
+    expect(res).toEqual({ ok: true });
+    expect(materialize(headDoc.root)).toEqual({ list: ["b", "c", "a"] });
+  });
+
+  it("treats self-move as a no-op", () => {
+    const baseJson: JsonValue = { a: 1 };
+    const baseDoc = docFromJsonWithDot(baseJson, dot("A", 0));
+    const headDoc = cloneDoc(baseDoc);
+    const patch: JsonPatchOp[] = [{ op: "move", from: "/a", path: "/a" }];
+
+    const res = jsonPatchToCrdt(baseDoc, headDoc, patch, newDotGen("A", 1));
+    expect(res).toEqual({ ok: true });
+    expect(materialize(headDoc.root)).toEqual({ a: 1 });
+  });
+
+  it("matches applyPatch for sequential move edge cases", () => {
+    const patch: JsonPatchOp[] = [{ op: "move", from: "/list/0", path: "/list/2" }];
+    const state = createState({ list: ["a", "b", "c"] }, { actor: "A" });
+    const highLevel = applyPatch(state, patch, { semantics: "sequential" });
+
+    const baseDoc = cloneDoc(state.doc);
+    const headDoc = cloneDoc(state.doc);
+    const lowLevel = jsonPatchToCrdt({
+      base: baseDoc,
+      head: headDoc,
+      patch,
+      newDot: newDotGen("A", state.clock.ctr),
+      semantics: "sequential",
+    });
+
+    expect(lowLevel).toEqual({ ok: true });
+    expect(materialize(headDoc.root)).toEqual(toJson(highLevel));
   });
 
   it("rejects out-of-bounds array inserts and deletes", () => {

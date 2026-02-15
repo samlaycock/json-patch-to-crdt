@@ -106,7 +106,7 @@ export function compileJsonPatchToIntent(
   for (let opIndex = 0; opIndex < patch.length; opIndex++) {
     const op = patch[opIndex]!;
     const compileBase = semantics === "sequential" ? workingBase : baseJson;
-    intents.push(...compileSingleOp(compileBase, op, opIndex));
+    intents.push(...compileSingleOp(compileBase, op, opIndex, semantics));
 
     if (semantics === "sequential") {
       workingBase = applyPatchOpToJson(workingBase, op, opIndex);
@@ -347,7 +347,12 @@ function assertNever(_value: never, message: string): never {
   throw new Error(message);
 }
 
-function compileSingleOp(baseJson: JsonValue, op: JsonPatchOp, opIndex: number): IntentOp[] {
+function compileSingleOp(
+  baseJson: JsonValue,
+  op: JsonPatchOp,
+  opIndex: number,
+  semantics: "sequential" | "base",
+): IntentOp[] {
   if (op.op === "test") {
     return [
       {
@@ -372,10 +377,31 @@ function compileSingleOp(baseJson: JsonValue, op: JsonPatchOp, opIndex: number):
     }
 
     const val = lookupValueOrThrow(baseJson, fromPath, op.from, opIndex);
-    const out = compileSingleOp(baseJson, { op: "add", path: op.path, value: val }, opIndex);
+
+    if (op.op === "move" && isSamePath(fromPath, toPath)) {
+      return [];
+    }
+
+    if (op.op === "move" && semantics === "sequential") {
+      const removeOp: JsonPatchOp = { op: "remove", path: op.from };
+      const addOp: JsonPatchOp = { op: "add", path: op.path, value: val };
+      const baseAfterRemove = applyPatchOpToJson(baseJson, removeOp, opIndex);
+
+      return [
+        ...compileSingleOp(baseJson, removeOp, opIndex, semantics),
+        ...compileSingleOp(baseAfterRemove, addOp, opIndex, semantics),
+      ];
+    }
+
+    const out = compileSingleOp(
+      baseJson,
+      { op: "add", path: op.path, value: val },
+      opIndex,
+      semantics,
+    );
 
     if (op.op === "move") {
-      out.push(...compileSingleOp(baseJson, { op: "remove", path: op.from }, opIndex));
+      out.push(...compileSingleOp(baseJson, { op: "remove", path: op.from }, opIndex, semantics));
     }
 
     return out;
@@ -645,6 +671,20 @@ function isStrictDescendantPath(from: string[], to: string[]): boolean {
 
   for (let i = 0; i < from.length; i++) {
     if (from[i] !== to[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isSamePath(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) {
       return false;
     }
   }
