@@ -830,6 +830,66 @@ describe("clock and state", () => {
     expect(toJson(state)).toEqual({ a: 1 });
   });
 
+  it("returns typed errors when copy source is missing in tryApplyPatch", () => {
+    const state = createState({ a: 1 }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "copy", from: "/b", path: "/c" }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("MISSING_PARENT");
+      expect(result.error.path).toBe("/b");
+      expect(result.error.opIndex).toBe(0);
+    }
+  });
+
+  it("returns typed errors when copy source pointer is invalid in tryApplyPatch", () => {
+    const state = createState({ a: 1 }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "copy", from: "b", path: "/c" }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_POINTER");
+      expect(result.error.path).toBe("b");
+      expect(result.error.opIndex).toBe(0);
+    }
+  });
+
+  it("throws PatchError with typed metadata when move source is missing", () => {
+    const state = createState({ a: 1 }, { actor: "A" });
+
+    try {
+      applyPatch(state, [{ op: "move", from: "/b", path: "/c" }]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchError);
+      if (error instanceof PatchError) {
+        expect(error.reason).toBe("MISSING_PARENT");
+        expect(error.path).toBe("/b");
+        expect(error.opIndex).toBe(0);
+      }
+      return;
+    }
+
+    throw new Error("Expected PatchError");
+  });
+
+  it("throws PatchError with typed metadata for out-of-bounds move source index", () => {
+    const state = createState({ list: [1] }, { actor: "A" });
+
+    try {
+      applyPatch(state, [{ op: "move", from: "/list/2", path: "/list/0" }]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchError);
+      if (error instanceof PatchError) {
+        expect(error.reason).toBe("OUT_OF_BOUNDS");
+        expect(error.path).toBe("/list/2");
+        expect(error.opIndex).toBe(0);
+      }
+      return;
+    }
+
+    throw new Error("Expected PatchError");
+  });
+
   it("supports non-throwing in-place application", () => {
     const state = createState({ list: ["a"] }, { actor: "A" });
     const result = tryApplyPatchInPlace(state, [{ op: "remove", path: "/list/5" }]);

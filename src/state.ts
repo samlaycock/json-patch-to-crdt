@@ -251,9 +251,9 @@ function applyPatchInternal(
         }
       : null;
 
-    for (const op of patch) {
+    for (const [opIndex, op] of patch.entries()) {
       const baseDoc = explicitBaseState ? explicitBaseState.doc : cloneDoc(state.doc);
-      const step = applyPatchOpSequential(state, op, options, baseDoc);
+      const step = applyPatchOpSequential(state, op, options, baseDoc, opIndex);
       if (!step.ok) {
         return step;
       }
@@ -294,11 +294,17 @@ function applyPatchOpSequential(
   op: JsonPatchOp,
   options: ApplyPatchOptions,
   baseDoc: Doc,
+  opIndex: number,
 ): ApplyResult {
   const baseJson = materialize(baseDoc.root);
 
   if (op.op === "move") {
-    const fromValue = getAtJson(baseJson, parseJsonPointer(op.from));
+    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex);
+    if (!fromResolved.ok) {
+      return fromResolved;
+    }
+
+    const fromValue = fromResolved.value;
     const removeRes = applySinglePatchOp(
       state,
       baseDoc,
@@ -326,7 +332,12 @@ function applyPatchOpSequential(
   }
 
   if (op.op === "copy") {
-    const fromValue = getAtJson(baseJson, parseJsonPointer(op.from));
+    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex);
+    if (!fromResolved.ok) {
+      return fromResolved;
+    }
+
+    const fromValue = fromResolved.value;
     return applySinglePatchOp(
       state,
       baseDoc,
@@ -340,6 +351,28 @@ function applyPatchOpSequential(
   }
 
   return applySinglePatchOp(state, baseDoc, op, options);
+}
+
+function resolveValueAtPointer(
+  baseJson: JsonValue,
+  pointer: string,
+  opIndex: number,
+): { ok: true; value: JsonValue } | ApplyError {
+  let path: string[];
+  try {
+    path = parseJsonPointer(pointer);
+  } catch (error) {
+    return toPointerParseApplyError(error, pointer, opIndex);
+  }
+
+  try {
+    return {
+      ok: true,
+      value: getAtJson(baseJson, path),
+    };
+  } catch (error) {
+    return toPointerLookupApplyError(error, pointer, opIndex);
+  }
 }
 
 function applySinglePatchOp(
@@ -447,5 +480,73 @@ function toApplyError(error: unknown): ApplyError {
     code: 409,
     reason: "INVALID_PATCH",
     message: error instanceof Error ? error.message : "failed to compile patch",
+  };
+}
+
+function toPointerParseApplyError(error: unknown, pointer: string, opIndex: number): ApplyError {
+  return {
+    ok: false,
+    code: 409,
+    reason: "INVALID_POINTER",
+    message: error instanceof Error ? error.message : "invalid pointer",
+    path: pointer,
+    opIndex,
+  };
+}
+
+function toPointerLookupApplyError(error: unknown, pointer: string, opIndex: number): ApplyError {
+  const message = error instanceof Error ? error.message : "invalid path";
+
+  if (message.includes("Expected array index")) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_POINTER",
+      message,
+      path: pointer,
+      opIndex,
+    };
+  }
+
+  if (message.includes("Index out of bounds")) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "OUT_OF_BOUNDS",
+      message,
+      path: pointer,
+      opIndex,
+    };
+  }
+
+  if (message.includes("Missing key")) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_PARENT",
+      message,
+      path: pointer,
+      opIndex,
+    };
+  }
+
+  if (message.includes("Cannot traverse into non-container")) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_TARGET",
+      message,
+      path: pointer,
+      opIndex,
+    };
+  }
+
+  return {
+    ok: false,
+    code: 409,
+    reason: "INVALID_PATCH",
+    message,
+    path: pointer,
+    opIndex,
   };
 }
