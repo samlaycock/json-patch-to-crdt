@@ -634,25 +634,33 @@ function parseArrayIndexToken(
 }
 
 function compileErrorFromLookup(error: unknown, path: string, opIndex: number): PatchCompileError {
+  const mapped = mapLookupErrorToPatchReason(error);
+  return compileError(mapped.reason, mapped.message, path, opIndex);
+}
+
+export function mapLookupErrorToPatchReason(error: unknown): {
+  reason: PatchErrorReason;
+  message: string;
+} {
   const message = error instanceof Error ? error.message : "invalid path";
 
   if (message.includes("Expected array index")) {
-    return compileError("INVALID_POINTER", message, path, opIndex);
+    return { reason: "INVALID_POINTER", message };
   }
 
   if (message.includes("Index out of bounds")) {
-    return compileError("OUT_OF_BOUNDS", message, path, opIndex);
+    return { reason: "OUT_OF_BOUNDS", message };
   }
 
   if (message.includes("Missing key")) {
-    return compileError("MISSING_PARENT", message, path, opIndex);
+    return { reason: "MISSING_PARENT", message };
   }
 
   if (message.includes("Cannot traverse into non-container")) {
-    return compileError("INVALID_TARGET", message, path, opIndex);
+    return { reason: "INVALID_TARGET", message };
   }
 
-  return compileError("INVALID_PATCH", message, path, opIndex);
+  return { reason: "INVALID_PATCH", message };
 }
 
 function compileError(
