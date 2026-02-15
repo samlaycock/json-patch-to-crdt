@@ -64,6 +64,7 @@ import { applyPatch, createState, forkState, mergeState, toJson } from "json-pat
 const origin = createState({ count: 0, items: ["a"] }, { actor: "origin" });
 
 // Fork shared-origin replicas with local actor identities.
+// Actor IDs must be unique per live peer (same-actor reuse is rejected by default).
 const peerA = forkState(origin, "A");
 const peerB = forkState(origin, "B");
 
@@ -315,7 +316,7 @@ Internals helpers like `jsonPatchToCrdtSafe` and `tryMergeDoc` return the same s
 ### State helpers
 
 - `createState(initial, { actor, start? })` - Create a new CRDT state from JSON.
-- `forkState(origin, actor)` - Fork a shared-origin replica with a new local actor ID.
+- `forkState(origin, actor, options?)` - Fork a shared-origin replica with a new local actor ID. Reusing `origin` actor IDs is rejected by default (`options.allowActorReuse: true` to opt in explicitly).
 - `applyPatch(state, patch, options?)` - Apply a patch immutably, returning a new state (`semantics: "sequential"` by default).
 - `applyPatchInPlace(state, patch, options?)` - Apply a patch by mutating state in place (`atomic: true` by default).
 - `tryApplyPatch(state, patch, options?)` - Non-throwing immutable apply (`{ ok: true, state }` or `{ ok: false, error }`).
@@ -393,6 +394,9 @@ No. It is deterministic and usually compact, but not guaranteed to be minimal.
 
 **How do I merge states from two peers?**
 Use `forkState(origin, actor)` to create each peer from the same origin, then `mergeState(local, remote, { actor: localActorId })`. Each peer should keep a stable unique actor ID across merges. See the [Multi-Peer Sync](#multi-peer-sync) example above.
+
+**Why did `forkState` throw about actor uniqueness?**
+By default, `forkState` blocks reusing `origin.clock.actor` because same-actor forks can mint duplicate dots and produce order-dependent merges. If you intentionally need same-actor cloning, pass `forkState(origin, actor, { allowActorReuse: true })`.
 
 **Why can my local counter jump after a merge?**
 Array inserts that target an existing predecessor may need to outrank sibling insert dots for deterministic ordering. The library can fast-forward the local counter in constant time to avoid expensive loops, but the resulting counter value may still jump upward when merging with peers that already have high counters.

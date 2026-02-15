@@ -8,6 +8,7 @@ export type {
   ApplyPatchOptions,
   CrdtState,
   DiffOptions,
+  ForkStateOptions,
   JsonPatch,
   JsonPatchOp,
   JsonPrimitive,

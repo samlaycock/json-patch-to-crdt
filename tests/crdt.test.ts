@@ -643,6 +643,21 @@ describe("clock and state", () => {
     expect(list).toContain("fromB");
   });
 
+  it("rejects same-actor fork reuse by default", () => {
+    const origin = createState({ count: 0 }, { actor: "A" });
+    expect(() => forkState(origin, "A")).toThrow(
+      "forkState actor must be unique; refusing to reuse origin actor 'A'",
+    );
+  });
+
+  it("allows same-actor fork reuse only when explicitly enabled", () => {
+    const origin = createState({ count: 0 }, { actor: "A" });
+    const reused = forkState(origin, "A", { allowActorReuse: true });
+    expect(toJson(reused)).toEqual({ count: 0 });
+    expect(reused.clock.actor).toBe("A");
+    expect(reused.clock.ctr).toBe(origin.clock.ctr);
+  });
+
   it("applies patches with the friendly API", () => {
     const state = createState({ list: ["a"] }, { actor: "A" });
     const next = applyPatch(state, [{ op: "add", path: "/list/-", value: "b" }]);
