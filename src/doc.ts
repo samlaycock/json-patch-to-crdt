@@ -7,6 +7,7 @@ import {
   diffJsonPatch,
   getAtJson,
   jsonEquals,
+  parseJsonPointer,
 } from "./patch";
 import {
   HEAD,
@@ -752,8 +753,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
     }
   };
 
-  for (let opIndex = 0; opIndex < options.patch.length; opIndex++) {
-    const op = options.patch[opIndex]!;
+  const applySequentialOp = (op: JsonPatchOp, opIndex: number): ApplyResult => {
     const baseJson = materialize(shadowBase.root);
     let intents: IntentOp[];
     try {
@@ -790,6 +790,53 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
       }
     } else {
       shadowBase = cloneDoc(options.head);
+    }
+
+    return { ok: true };
+  };
+
+  for (let opIndex = 0; opIndex < options.patch.length; opIndex++) {
+    const op = options.patch[opIndex]!;
+    if (op.op === "move") {
+      const baseJson = materialize(shadowBase.root);
+      let fromValue: JsonValue;
+      try {
+        fromValue = structuredClone(getAtJson(baseJson, parseJsonPointer(op.from)));
+      } catch {
+        try {
+          compileJsonPatchToIntent(baseJson, [{ op: "remove", path: op.from }], {
+            semantics: "sequential",
+          });
+        } catch (error) {
+          return withOpIndex(toApplyError(error), opIndex);
+        }
+
+        return withOpIndex(
+          toApplyError(new Error(`failed to resolve move source at ${op.from}`)),
+          opIndex,
+        );
+      }
+
+      if (op.from === op.path) {
+        continue;
+      }
+
+      const removeStep = applySequentialOp({ op: "remove", path: op.from }, opIndex);
+      if (!removeStep.ok) {
+        return removeStep;
+      }
+
+      const addStep = applySequentialOp({ op: "add", path: op.path, value: fromValue }, opIndex);
+      if (!addStep.ok) {
+        return addStep;
+      }
+
+      continue;
+    }
+
+    const step = applySequentialOp(op, opIndex);
+    if (!step.ok) {
+      return step;
     }
   }
 
