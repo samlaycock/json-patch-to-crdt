@@ -260,6 +260,8 @@ function applyPatchInternal(
   const semantics: PatchSemantics = options.semantics ?? "sequential";
 
   if (semantics === "sequential") {
+    // When callers pass an explicit base, we keep a private shadow copy that advances
+    // per operation so array index and pointer resolution remain consistent with RFC 6902.
     const explicitBaseState: CrdtState | null = options.base
       ? {
           doc: cloneDoc(options.base.doc),
@@ -275,6 +277,8 @@ function applyPatchInternal(
       }
 
       if (explicitBaseState && op.op !== "test") {
+        // Replay non-test ops into the explicit-base shadow so the next sequential op
+        // resolves paths against the same evolving snapshot the compiler expects.
         const baseStep = applyPatchInternal(explicitBaseState, [op], {
           semantics: "sequential",
           testAgainst: "base",
@@ -334,6 +338,7 @@ function applyPatchOpSequential(
       return removeRes;
     }
 
+    // `move` resolves `path` after removal; compile/add against the post-remove head.
     const addBase = cloneDoc(state.doc);
     return applySinglePatchOp(
       state,

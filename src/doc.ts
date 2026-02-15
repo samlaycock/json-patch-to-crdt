@@ -460,10 +460,13 @@ function nextInsertDotForPrev(
   }
 
   if (maxSiblingDot) {
+    // Fast-forward external counters so generated dots can stay strictly after
+    // existing siblings that share the same predecessor.
     bumpCounterAbove?.(maxSiblingDot.ctr);
   }
 
   let candidate = newDot();
+  // Preserve deterministic "latest insert first" sibling ordering in linearization.
   while (maxSiblingDot && compareDot(candidate, maxSiblingDot) <= 0) {
     candidate = newDot();
   }
@@ -744,6 +747,8 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
     );
   }
 
+  // Sequential mode compiles each op against a rolling snapshot. `shadowBase`
+  // tracks that compile-time view without mutating caller-provided `base`.
   let shadowBase = cloneDoc(evalTestAgainst === "base" ? options.base : options.head);
   let shadowCtr = 0;
   const shadowDot = () => ({ actor: "__shadow__", ctr: ++shadowCtr });
@@ -777,6 +782,8 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
     }
 
     if (evalTestAgainst === "base") {
+      // Keep the compile-time base in lockstep for future operations while using
+      // synthetic dots so we do not consume real actor counters.
       const shadowStep = applyIntentsToCrdt(
         shadowBase,
         shadowBase,
@@ -801,6 +808,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
       const baseJson = materialize(shadowBase.root);
       let fromValue: JsonValue;
       try {
+        // Read the source before applying remove so move behaves as "copy then remove".
         fromValue = structuredClone(getAtJson(baseJson, parseJsonPointer(op.from)));
       } catch {
         try {

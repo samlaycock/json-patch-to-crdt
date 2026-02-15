@@ -117,6 +117,8 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
   if (a.kind === "seq" && b.kind === "seq") {
     const hasElemsA = a.elems.size > 0;
     const hasElemsB = b.elems.size > 0;
+    // Two non-empty arrays must share at least one element id; otherwise they are
+    // unrelated lineages and index-based merges would be ambiguous.
     if (hasElemsA && hasElemsB) {
       let shared = false;
       for (const id of a.elems.keys()) {
@@ -133,6 +135,8 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
   }
 
   if (a.kind === "obj" && b.kind === "obj") {
+    // Only recurse through keys present on both sides; missing keys cannot encode
+    // a lineage conflict because there is no pair of arrays to compare.
     const sharedKeys = new Set([...a.entries.keys()].filter((key) => b.entries.has(key)));
     for (const key of sharedKeys) {
       const nextA = a.entries.get(key)!.node;

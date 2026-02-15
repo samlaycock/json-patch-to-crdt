@@ -5,26 +5,22 @@
 ### Patch Changes
 
 - fc7d049: Ensure high-level patch APIs return typed errors for sequential `copy`/`move` source lookup failures.
-
   - Prevent raw `Error` throws from escaping when `from` pointers are invalid, missing, or out-of-bounds.
   - Map `copy`/`move` source parse and lookup failures to structured `ApplyError` metadata (`reason`, `path`, `opIndex`).
   - Add regression tests covering `tryApplyPatch` and `applyPatch` behavior for missing source paths, invalid source pointers, and out-of-bounds source indices.
 
 - 18dcd31: Harden JSON Pointer and array-index parsing to match strict RFC behavior.
-
   - Reject invalid pointer escape sequences (anything other than `~0` and `~1`).
   - Reject leading-zero array indices (for example `/arr/01`) when resolving array paths.
   - Keep numeric-looking object keys valid when parent values are objects (for example `/obj/01`).
   - Add regression tests for invalid escapes, strict array-index parsing, and object-key compatibility.
 
 - 52cde5b: Harden `forkState` against unsafe same-actor replica forking.
-
   - Reject `forkState(origin, actor)` by default when `actor` matches `origin.clock.actor`.
   - Add an explicit `allowActorReuse` opt-in for advanced workflows that intentionally reuse actor IDs.
   - Document actor uniqueness requirements and add regression tests for default rejection and explicit override behavior.
 
 - 2650019: Fix `move` edge cases so sequential internals align with RFC 6902 and `applyPatch`.
-
   - Apply sequential `move` as remove-then-add in `jsonPatchToCrdt`, while capturing the source value before removal.
   - Treat self-move (`from === path`) as a no-op in sequential compilation and low-level application flow.
   - Add regression tests for forward array moves, self-move behavior, and parity between `jsonPatchToCrdt` and `applyPatch`.
