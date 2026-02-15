@@ -37,10 +37,7 @@ export function parseJsonPointer(ptr: string): string[] {
     throw new Error(`Invalid pointer: ${ptr}`);
   }
 
-  return ptr
-    .slice(1)
-    .split("/")
-    .map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"));
+  return ptr.slice(1).split("/").map(unescapeJsonPointerToken);
 }
 
 /** Convert a path array back to an RFC 6901 JSON Pointer string. */
@@ -52,6 +49,37 @@ export function stringifyJsonPointer(path: string[]): string {
   return `/${path.map(escapeJsonPointer).join("/")}`;
 }
 
+function unescapeJsonPointerToken(token: string): string {
+  let out = "";
+
+  for (let i = 0; i < token.length; i++) {
+    const ch = token[i]!;
+
+    if (ch !== "~") {
+      out += ch;
+      continue;
+    }
+
+    const esc = token[i + 1];
+    if (esc === "0") {
+      out += "~";
+      i += 1;
+      continue;
+    }
+
+    if (esc === "1") {
+      out += "/";
+      i += 1;
+      continue;
+    }
+
+    const sequence = esc === undefined ? "~" : `~${esc}`;
+    throw new Error(`Invalid pointer escape sequence '${sequence}'`);
+  }
+
+  return out;
+}
+
 /**
  * Navigate a JSON value by path and return the value at that location.
  * Throws if the path is invalid, out of bounds, or traverses a non-container.
@@ -61,11 +89,11 @@ export function getAtJson(base: JsonValue, path: string[]): JsonValue {
 
   for (const seg of path) {
     if (Array.isArray(cur)) {
-      const idx = seg === "-" ? cur.length : Number(seg);
-
-      if (!Number.isInteger(idx)) {
+      if (!ARRAY_INDEX_TOKEN_PATTERN.test(seg)) {
         throw new Error(`Expected array index, got ${seg}`);
       }
+
+      const idx = Number(seg);
 
       if (idx < 0 || idx >= cur.length) {
         throw new Error(`Index out of bounds at ${seg}`);
@@ -330,6 +358,8 @@ export function jsonEquals(a: JsonValue, b: JsonValue): boolean {
 function isPlainObject(value: unknown): value is { [k: string]: JsonValue } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+const ARRAY_INDEX_TOKEN_PATTERN = /^(0|[1-9][0-9]*)$/;
 
 function hasOwn(value: Record<string, JsonValue>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -603,7 +633,7 @@ function parseArrayIndexToken(
     return Number.POSITIVE_INFINITY;
   }
 
-  if (!/^[0-9]+$/.test(token)) {
+  if (!ARRAY_INDEX_TOKEN_PATTERN.test(token)) {
     throw compileError("INVALID_POINTER", `expected array index at ${path}`, path, opIndex);
   }
 

@@ -33,6 +33,7 @@ import {
   newSeq,
   objRemove,
   objSet,
+  PatchCompileError,
   PatchError,
   parseJsonPointer,
   stringifyJsonPointer,
@@ -925,6 +926,11 @@ describe("json pointer parsing", () => {
     expect(() => parseJsonPointer("a")).toThrow();
   });
 
+  it("rejects invalid escape sequences", () => {
+    expect(() => parseJsonPointer("/a~2b")).toThrow();
+    expect(() => parseJsonPointer("/a~")).toThrow();
+  });
+
   it("round-trips stringify/parse for edge cases", () => {
     const paths = [[], [""], ["a/b"], ["~"], ["a", "", "b"], ["~0", "~1", "a~b/"]];
 
@@ -1314,6 +1320,31 @@ describe("compileJsonPatchToIntent", () => {
 
     expect(compileJsonPatchToIntent(base, patch)).toEqual([
       { t: "ObjSet", path: ["obj"], key: "0", value: "b", mode: "replace" },
+    ]);
+  });
+
+  it("rejects array indices with leading zeros", () => {
+    const base: JsonValue = { arr: [1, 2] };
+
+    try {
+      compileJsonPatchToIntent(base, [{ op: "replace", path: "/arr/01", value: 9 }]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchCompileError);
+      if (error instanceof PatchCompileError) {
+        expect(error.reason).toBe("INVALID_POINTER");
+      }
+      return;
+    }
+
+    throw new Error("Expected PatchCompileError");
+  });
+
+  it("allows numeric-looking object keys with leading zeros", () => {
+    const base: JsonValue = { obj: { "01": "a" } };
+    const patch: JsonPatchOp[] = [{ op: "replace", path: "/obj/01", value: "b" }];
+
+    expect(compileJsonPatchToIntent(base, patch)).toEqual([
+      { t: "ObjSet", path: ["obj"], key: "01", value: "b", mode: "replace" },
     ]);
   });
 });
