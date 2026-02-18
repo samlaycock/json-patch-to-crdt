@@ -3418,4 +3418,59 @@ describe("replica session flows", () => {
     expect(replayed).toBeNull();
     expect((materialize(restored.head.root) as { list: string[] }).list).toEqual(["a", "x"]);
   });
+
+  describe("deep nesting", () => {
+    function createNestedObject(depth: number): JsonValue {
+      if (depth === 0) return { value: 1 };
+      return { nested: createNestedObject(depth - 1) };
+    }
+
+    function createNestedArray(depth: number): JsonValue {
+      if (depth === 0) return [1];
+      return [createNestedArray(depth - 1)];
+    }
+
+    it("handles deeply nested objects in createState", () => {
+      const depth = 500;
+      const nested = createNestedObject(depth);
+      const state = createState(nested, { actor: "A" });
+      expect(materialize(state.doc.root)).toEqual(nested);
+    });
+
+    it("handles deeply nested arrays in createState", () => {
+      const depth = 500;
+      const nested = createNestedArray(depth);
+      const state = createState(nested, { actor: "A" });
+      expect(materialize(state.doc.root)).toEqual(nested);
+    });
+
+    it("handles materialize on deeply nested state", () => {
+      const depth = 500;
+      const nested = createNestedObject(depth);
+      const state = createState(nested, { actor: "A" });
+      const result = materialize(state.doc.root);
+      expect(result).toEqual(nested);
+    });
+
+    it("handles mergeState on deeply nested state", () => {
+      const depth = 500;
+      const nested = createNestedObject(depth);
+      const stateA = createState(nested, { actor: "A" });
+      const stateB = createState(nested, { actor: "B" });
+
+      const merged = mergeState(stateA, stateB);
+      expect(materialize(merged.doc.root)).toEqual(nested);
+    });
+
+    it("throws on excessive nesting depth in docFromJson", () => {
+      const nested = createNestedObject(2000);
+      expect(() => docFromJson(nested, () => ({ actor: "A", ctr: 1 }), 1024)).toThrow();
+    });
+
+    it("throws on excessive nesting depth in materialize", () => {
+      const nested = createNestedObject(2000);
+      const doc = docFromJson(nested, () => ({ actor: "A", ctr: 1 }), 3000);
+      expect(() => materialize(doc.root, 1024)).toThrow();
+    });
+  });
 });

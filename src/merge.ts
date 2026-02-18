@@ -17,6 +17,8 @@ import type {
   TryMergeStateResult,
 } from "./types";
 
+const DEFAULT_MAX_DEPTH = 1024;
+
 /** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
 export class MergeError extends Error {
   readonly code: 409;
@@ -233,30 +235,25 @@ function repDot(node: Node): Dot {
   }
 }
 
-function mergeNode(a: Node, b: Node): Node {
-  // Same kind → merge semantics
+function mergeNode(a: Node, b: Node, maxDepth: number = DEFAULT_MAX_DEPTH): Node {
   if (a.kind === "lww" && b.kind === "lww") return mergeLww(a, b);
-  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b);
-  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b);
 
-  // Kind mismatch: higher representative dot wins entirely.
+  if (maxDepth <= 0) {
+    throw new Error(`Maximum nesting depth exceeded`);
+  }
+
+  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b, maxDepth - 1);
+  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, maxDepth - 1);
+
   const cmp = compareDot(repDot(a), repDot(b));
   if (cmp >= 0) return cloneNodeShallow(a);
   return cloneNodeShallow(b);
 }
 
-function mergeLww(a: LwwReg, b: LwwReg): LwwReg {
-  if (compareDot(a.dot, b.dot) >= 0) {
-    return { kind: "lww", value: structuredClone(a.value), dot: { ...a.dot } };
-  }
-  return { kind: "lww", value: structuredClone(b.value), dot: { ...b.dot } };
-}
-
-function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
+function mergeObj(a: ObjNode, b: ObjNode, maxDepth: number): ObjNode {
   const entries = new Map<string, { node: Node; dot: Dot }>();
   const tombstone = new Map<string, Dot>();
 
-  // Merge tombstones: max dot per key.
   const allTombKeys = new Set([...a.tombstone.keys(), ...b.tombstone.keys()]);
   for (const key of allTombKeys) {
     const da = a.tombstone.get(key);
@@ -270,7 +267,6 @@ function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
     }
   }
 
-  // Merge entries: union of keys, recursive merge when both present.
   const allKeys = new Set([...a.entries.keys(), ...b.entries.keys()]);
   for (const key of allKeys) {
     const ea = a.entries.get(key);
@@ -278,7 +274,7 @@ function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
 
     let merged: { node: Node; dot: Dot };
     if (ea && eb) {
-      const mergedNode = mergeNode(ea.node, eb.node);
+      const mergedNode = mergeNode(ea.node, eb.node, maxDepth);
       const dot = compareDot(ea.dot, eb.dot) >= 0 ? { ...ea.dot } : { ...eb.dot };
       merged = { node: mergedNode, dot };
     } else if (ea) {
@@ -287,10 +283,9 @@ function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
       merged = { node: cloneNodeShallow(eb!.node), dot: { ...eb!.dot } };
     }
 
-    // Delete-wins check: if tombstone dot >= entry dot, drop the entry.
     const td = tombstone.get(key);
     if (td && compareDot(td, merged.dot) >= 0) {
-      continue; // deleted
+      continue;
     }
 
     entries.set(key, merged);
@@ -299,21 +294,16 @@ function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
   return { kind: "obj", entries, tombstone };
 }
 
-function mergeSeq(a: RgaSeq, b: RgaSeq): RgaSeq {
+function mergeSeq(a: RgaSeq, b: RgaSeq, maxDepth: number): RgaSeq {
   const elems = new Map<string, RgaElem>();
 
-  // Union by element ID.
   const allIds = new Set([...a.elems.keys(), ...b.elems.keys()]);
   for (const id of allIds) {
     const ea = a.elems.get(id);
     const eb = b.elems.get(id);
 
     if (ea && eb) {
-      // Both sides have this element. Merge:
-      // - tombstone: true if either side tombstoned it
-      // - value: recursively merge child nodes
-      // - prev/insDot should be identical (same element), use either
-      const mergedValue = mergeNode(ea.value, eb.value);
+      const mergedValue = mergeNode(ea.value, eb.value, maxDepth);
       elems.set(id, {
         id,
         prev: ea.prev,
@@ -329,6 +319,13 @@ function mergeSeq(a: RgaSeq, b: RgaSeq): RgaSeq {
   }
 
   return { kind: "seq", elems };
+}
+
+function mergeLww(a: LwwReg, b: LwwReg): LwwReg {
+  if (compareDot(a.dot, b.dot) >= 0) {
+    return { kind: "lww", value: structuredClone(a.value), dot: { ...a.dot } };
+  }
+  return { kind: "lww", value: structuredClone(b.value), dot: { ...b.dot } };
 }
 
 function cloneElem(e: RgaElem): RgaElem {

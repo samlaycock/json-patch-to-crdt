@@ -35,14 +35,17 @@ import type {
   RgaSeq,
 } from "./types";
 
+const DEFAULT_MAX_DEPTH = 1024;
+
 /**
  * Create a CRDT document from a JSON value, using fresh dots for each node.
  * @param value - The JSON value to convert.
  * @param nextDot - A function that generates a unique `Dot` on each call.
+ * @param maxDepth - Maximum nesting depth allowed (default 1024).
  * @returns A new CRDT `Doc`.
  */
-export function docFromJson(value: JsonValue, nextDot: () => Dot): Doc {
-  return { root: nodeFromJson(value, nextDot) };
+export function docFromJson(value: JsonValue, nextDot: () => Dot, maxDepth: number = DEFAULT_MAX_DEPTH): Doc {
+  return { root: nodeFromJson(value, nextDot, maxDepth) };
 }
 
 /**
@@ -207,34 +210,98 @@ function deepNodeFromJson(value: JsonValue, dot: Dot): Node {
   return obj;
 }
 
-function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return newReg(value, nextDot());
-  }
+function nodeFromJson(value: JsonValue, nextDot: () => Dot, maxDepth: number = DEFAULT_MAX_DEPTH): Node {
+  type StackItem = {
+    value: JsonValue;
+    depth: number;
+    result: Node | null;
+    processed: boolean;
+  };
 
-  if (Array.isArray(value)) {
-    const seq = newSeq();
-    let prev = HEAD;
-    for (const v of value) {
-      const insDot = nextDot();
-      const id = dotToElemId(insDot);
-      rgaInsertAfter(seq, prev, id, insDot, nodeFromJson(v, nextDot));
-      prev = id;
+  const results: Map<JsonValue, Node> = new Map();
+  const stack: StackItem[] = [];
+
+  stack.push({ value, depth: 0, result: null, processed: false });
+
+  while (stack.length > 0) {
+    const item = stack[stack.length - 1]!;
+
+    if (item.processed) {
+      stack.pop();
+      continue;
     }
-    return seq;
+
+    if (item.depth > maxDepth) {
+      throw new Error(`Maximum nesting depth of ${maxDepth} exceeded`);
+    }
+
+    if (
+      item.value === null ||
+      typeof item.value === "string" ||
+      typeof item.value === "number" ||
+      typeof item.value === "boolean"
+    ) {
+      item.result = newReg(item.value, nextDot());
+      item.processed = true;
+      results.set(item.value, item.result);
+      stack.pop();
+      continue;
+    }
+
+    const isArray = Array.isArray(item.value);
+    const numKeys = isArray ? (item.value as JsonValue[]).length : Object.keys(item.value).length;
+
+    if (numKeys === 0) {
+      item.result = isArray ? newSeq() : newObj();
+      item.processed = true;
+      results.set(item.value, item.result);
+      stack.pop();
+      continue;
+    }
+
+    const children: JsonValue[] = isArray
+      ? (item.value as JsonValue[])
+      : Object.values(item.value as Record<string, JsonValue>);
+
+    let allChildrenProcessed = true;
+    for (const child of children) {
+      if (!results.has(child)) {
+        allChildrenProcessed = false;
+        stack.push({ value: child, depth: item.depth + 1, result: null, processed: false });
+      }
+    }
+
+    if (!allChildrenProcessed) {
+      continue;
+    }
+
+    item.processed = true;
+
+    if (isArray) {
+      const seq = newSeq();
+      let prev = HEAD;
+      for (const v of item.value as JsonValue[]) {
+        const childResult = results.get(v)!;
+        const insDot = nextDot();
+        const id = dotToElemId(insDot);
+        rgaInsertAfter(seq, prev, id, insDot, childResult);
+        prev = id;
+      }
+      item.result = seq;
+      results.set(item.value, seq);
+    } else {
+      const obj = newObj();
+      for (const [k, v] of Object.entries(item.value as Record<string, JsonValue>)) {
+        const childResult = results.get(v)!;
+        const entryDot = nextDot();
+        objSet(obj, k, childResult, entryDot);
+      }
+      item.result = obj;
+      results.set(item.value, obj);
+    }
   }
 
-  const obj = newObj();
-  for (const [k, v] of Object.entries(value)) {
-    const entryDot = nextDot();
-    objSet(obj, k, nodeFromJson(v, nextDot), entryDot);
-  }
-  return obj;
+  return results.get(value)!;
 }
 
 /** Deep-clone a CRDT document. The clone is fully independent of the original. */
