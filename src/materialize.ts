@@ -1,24 +1,137 @@
-import { rgaLinearizeIds } from "./rga";
 import type { JsonValue, Node } from "./types";
 
-/** Recursively convert a CRDT node graph into a plain JSON value. */
-export function materialize(node: Node): JsonValue {
-  switch (node.kind) {
-    case "lww":
-      return node.value;
-    case "obj": {
-      const out: Record<string, JsonValue> = {};
+import { assertTraversalDepth } from "./depth";
+import { rgaLinearizeIds } from "./rga";
 
-      for (const [k, { node: child }] of node.entries.entries()) {
-        out[k] = materialize(child);
+/** Convert a CRDT node graph into a plain JSON value using an explicit stack. */
+export function materialize(node: Node): JsonValue {
+  if (node.kind === "lww") {
+    return node.value;
+  }
+
+  const root: JsonValue = node.kind === "obj" ? {} : [];
+  type ObjFrame = {
+    kind: "obj";
+    depth: number;
+    entries: Array<[string, Node]>;
+    index: number;
+    out: Record<string, JsonValue>;
+  };
+  type SeqFrame = {
+    kind: "seq";
+    depth: number;
+    ids: string[];
+    index: number;
+    seq: Extract<Node, { kind: "seq" }>;
+    out: JsonValue[];
+  };
+  type Frame = ObjFrame | SeqFrame;
+
+  const stack: Frame[] = [];
+  if (node.kind === "obj") {
+    stack.push({
+      kind: "obj",
+      depth: 0,
+      entries: Array.from(node.entries.entries(), ([key, value]) => [key, value.node]),
+      index: 0,
+      out: root as Record<string, JsonValue>,
+    });
+  } else {
+    stack.push({
+      kind: "seq",
+      depth: 0,
+      ids: rgaLinearizeIds(node),
+      index: 0,
+      seq: node,
+      out: root as JsonValue[],
+    });
+  }
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.kind === "obj") {
+      if (frame.index >= frame.entries.length) {
+        stack.pop();
+        continue;
       }
 
-      return out;
-    }
-    case "seq": {
-      const ids = rgaLinearizeIds(node);
+      const [key, child] = frame.entries[frame.index++]!;
+      const childDepth = frame.depth + 1;
+      assertTraversalDepth(childDepth);
 
-      return ids.map((id) => materialize(node.elems.get(id)!.value));
+      if (child.kind === "lww") {
+        frame.out[key] = child.value;
+        continue;
+      }
+
+      if (child.kind === "obj") {
+        const outObj: Record<string, JsonValue> = {};
+        frame.out[key] = outObj;
+        stack.push({
+          kind: "obj",
+          depth: childDepth,
+          entries: Array.from(child.entries.entries(), ([childKey, value]) => [
+            childKey,
+            value.node,
+          ]),
+          index: 0,
+          out: outObj,
+        });
+        continue;
+      }
+
+      const outArr: JsonValue[] = [];
+      frame.out[key] = outArr;
+      stack.push({
+        kind: "seq",
+        depth: childDepth,
+        ids: rgaLinearizeIds(child),
+        index: 0,
+        seq: child,
+        out: outArr,
+      });
+      continue;
     }
+
+    if (frame.index >= frame.ids.length) {
+      stack.pop();
+      continue;
+    }
+
+    const id = frame.ids[frame.index++]!;
+    const child = frame.seq.elems.get(id)!.value;
+    const childDepth = frame.depth + 1;
+    assertTraversalDepth(childDepth);
+
+    if (child.kind === "lww") {
+      frame.out.push(child.value);
+      continue;
+    }
+
+    if (child.kind === "obj") {
+      const outObj: Record<string, JsonValue> = {};
+      frame.out.push(outObj);
+      stack.push({
+        kind: "obj",
+        depth: childDepth,
+        entries: Array.from(child.entries.entries(), ([key, value]) => [key, value.node]),
+        index: 0,
+        out: outObj,
+      });
+      continue;
+    }
+
+    const outArr: JsonValue[] = [];
+    frame.out.push(outArr);
+    stack.push({
+      kind: "seq",
+      depth: childDepth,
+      ids: rgaLinearizeIds(child),
+      index: 0,
+      seq: child,
+      out: outArr,
+    });
   }
+
+  return root;
 }

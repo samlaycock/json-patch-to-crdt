@@ -1,5 +1,6 @@
-import { compareDot } from "./dot";
 import type { Dot, JsonValue, LwwReg, Node, ObjNode, RgaSeq } from "./types";
+
+import { compareDot } from "./dot";
 
 export function newObj(): ObjNode {
   return { kind: "obj", entries: new Map(), tombstone: new Map() };

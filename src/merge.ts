@@ -1,5 +1,3 @@
-import { compareDot } from "./dot";
-import { createClock } from "./clock";
 import type {
   ApplyError,
   ActorId,
@@ -11,23 +9,28 @@ import type {
   MergeStateOptions,
   Node,
   ObjNode,
+  PatchErrorReason,
   RgaElem,
   RgaSeq,
   TryMergeDocResult,
   TryMergeStateResult,
 } from "./types";
 
+import { createClock } from "./clock";
+import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
+import { compareDot } from "./dot";
+
 /** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
 export class MergeError extends Error {
   readonly code: 409;
-  readonly reason: "LINEAGE_MISMATCH";
+  readonly reason: PatchErrorReason;
   readonly path?: string;
 
   constructor(error: ApplyError) {
     super(error.message);
     this.name = "MergeError";
     this.code = error.code;
-    this.reason = "LINEAGE_MISMATCH";
+    this.reason = error.reason;
     this.path = error.path;
   }
 }
@@ -56,22 +59,30 @@ export function mergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): Doc {
 
 /** Non-throwing `mergeDoc` variant with structured conflict details. */
 export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryMergeDocResult {
-  const requireSharedOrigin = options.requireSharedOrigin ?? true;
-  const mismatchPath = requireSharedOrigin ? findSeqLineageMismatch(a.root, b.root, []) : null;
-  if (mismatchPath) {
-    return {
-      ok: false,
-      error: {
+  try {
+    const requireSharedOrigin = options.requireSharedOrigin ?? true;
+    const mismatchPath = requireSharedOrigin ? findSeqLineageMismatch(a.root, b.root, []) : null;
+    if (mismatchPath) {
+      return {
         ok: false,
-        code: 409,
-        reason: "LINEAGE_MISMATCH",
-        message: `merge requires shared array origin at ${mismatchPath}`,
-        path: mismatchPath,
-      },
-    };
-  }
+        error: {
+          ok: false,
+          code: 409,
+          reason: "LINEAGE_MISMATCH",
+          message: `merge requires shared array origin at ${mismatchPath}`,
+          path: mismatchPath,
+        },
+      };
+    }
 
-  return { ok: true, doc: { root: mergeNode(a.root, b.root) } };
+    return { ok: true, doc: { root: mergeNode(a.root, b.root) } };
+  } catch (error) {
+    if (error instanceof TraversalDepthError) {
+      return { ok: false, error: toDepthApplyError(error) };
+    }
+
+    throw error;
+  }
 }
 
 /**
@@ -114,36 +125,46 @@ export function tryMergeState(
 }
 
 function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null {
-  if (a.kind === "seq" && b.kind === "seq") {
-    const hasElemsA = a.elems.size > 0;
-    const hasElemsB = b.elems.size > 0;
-    // Two non-empty arrays must share at least one element id; otherwise they are
-    // unrelated lineages and index-based merges would be ambiguous.
-    if (hasElemsA && hasElemsB) {
-      let shared = false;
-      for (const id of a.elems.keys()) {
-        if (b.elems.has(id)) {
-          shared = true;
-          break;
+  const stack: Array<{ a: Node; b: Node; path: string[]; depth: number }> = [
+    { a, b, path, depth: path.length },
+  ];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    assertTraversalDepth(frame.depth);
+
+    if (frame.a.kind === "seq" && frame.b.kind === "seq") {
+      const hasElemsA = frame.a.elems.size > 0;
+      const hasElemsB = frame.b.elems.size > 0;
+      if (hasElemsA && hasElemsB) {
+        let shared = false;
+        for (const id of frame.a.elems.keys()) {
+          if (frame.b.elems.has(id)) {
+            shared = true;
+            break;
+          }
+        }
+
+        if (!shared) {
+          return `/${frame.path.join("/")}`;
         }
       }
-
-      if (!shared) {
-        return `/${path.join("/")}`;
-      }
     }
-  }
 
-  if (a.kind === "obj" && b.kind === "obj") {
-    // Only recurse through keys present on both sides; missing keys cannot encode
-    // a lineage conflict because there is no pair of arrays to compare.
-    const sharedKeys = new Set([...a.entries.keys()].filter((key) => b.entries.has(key)));
-    for (const key of sharedKeys) {
-      const nextA = a.entries.get(key)!.node;
-      const nextB = b.entries.get(key)!.node;
-      const mismatch = findSeqLineageMismatch(nextA, nextB, [...path, key]);
-      if (mismatch) {
-        return mismatch;
+    if (frame.a.kind === "obj" && frame.b.kind === "obj") {
+      const left = frame.a;
+      const right = frame.b;
+      const sharedKeys = [...left.entries.keys()].filter((key) => right.entries.has(key));
+      for (let i = sharedKeys.length - 1; i >= 0; i--) {
+        const key = sharedKeys[i]!;
+        const nextA = left.entries.get(key)!.node;
+        const nextB = right.entries.get(key)!.node;
+        stack.push({
+          a: nextA,
+          b: nextB,
+          path: [...frame.path, key],
+          depth: frame.depth + 1,
+        });
       }
     }
   }
@@ -166,46 +187,45 @@ function maxObservedCtrForActor(doc: Doc, actor: ActorId, a: CrdtState, b: CrdtS
 }
 
 function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
-  switch (node.kind) {
-    case "lww":
-      return node.dot.actor === actor ? node.dot.ctr : 0;
-    case "obj": {
-      let best = 0;
-      for (const entry of node.entries.values()) {
+  let best = 0;
+  const stack: Array<{ node: Node; depth: number }> = [{ node, depth: 0 }];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    assertTraversalDepth(frame.depth);
+
+    if (frame.node.kind === "lww") {
+      if (frame.node.dot.actor === actor && frame.node.dot.ctr > best) {
+        best = frame.node.dot.ctr;
+      }
+      continue;
+    }
+
+    if (frame.node.kind === "obj") {
+      for (const entry of frame.node.entries.values()) {
         if (entry.dot.actor === actor && entry.dot.ctr > best) {
           best = entry.dot.ctr;
         }
-
-        const childBest = maxCtrInNodeForActor(entry.node, actor);
-        if (childBest > best) {
-          best = childBest;
-        }
+        stack.push({ node: entry.node, depth: frame.depth + 1 });
       }
 
-      for (const tomb of node.tombstone.values()) {
+      for (const tomb of frame.node.tombstone.values()) {
         if (tomb.actor === actor && tomb.ctr > best) {
           best = tomb.ctr;
         }
       }
-
-      return best;
+      continue;
     }
-    case "seq": {
-      let best = 0;
-      for (const elem of node.elems.values()) {
-        if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
-          best = elem.insDot.ctr;
-        }
 
-        const childBest = maxCtrInNodeForActor(elem.value, actor);
-        if (childBest > best) {
-          best = childBest;
-        }
+    for (const elem of frame.node.elems.values()) {
+      if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
+        best = elem.insDot.ctr;
       }
-
-      return best;
+      stack.push({ node: elem.value, depth: frame.depth + 1 });
     }
   }
+
+  return best;
 }
 
 function repDot(node: Node): Dot {
@@ -234,15 +254,21 @@ function repDot(node: Node): Dot {
 }
 
 function mergeNode(a: Node, b: Node): Node {
+  return mergeNodeAtDepth(a, b, 0);
+}
+
+function mergeNodeAtDepth(a: Node, b: Node, depth: number): Node {
+  assertTraversalDepth(depth);
+
   // Same kind → merge semantics
   if (a.kind === "lww" && b.kind === "lww") return mergeLww(a, b);
-  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b);
-  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b);
+  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b, depth + 1);
+  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, depth + 1);
 
   // Kind mismatch: higher representative dot wins entirely.
   const cmp = compareDot(repDot(a), repDot(b));
-  if (cmp >= 0) return cloneNodeShallow(a);
-  return cloneNodeShallow(b);
+  if (cmp >= 0) return cloneNodeShallow(a, depth + 1);
+  return cloneNodeShallow(b, depth + 1);
 }
 
 function mergeLww(a: LwwReg, b: LwwReg): LwwReg {
@@ -252,7 +278,8 @@ function mergeLww(a: LwwReg, b: LwwReg): LwwReg {
   return { kind: "lww", value: structuredClone(b.value), dot: { ...b.dot } };
 }
 
-function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
+function mergeObj(a: ObjNode, b: ObjNode, depth: number): ObjNode {
+  assertTraversalDepth(depth);
   const entries = new Map<string, { node: Node; dot: Dot }>();
   const tombstone = new Map<string, Dot>();
 
@@ -278,13 +305,13 @@ function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
 
     let merged: { node: Node; dot: Dot };
     if (ea && eb) {
-      const mergedNode = mergeNode(ea.node, eb.node);
+      const mergedNode = mergeNodeAtDepth(ea.node, eb.node, depth + 1);
       const dot = compareDot(ea.dot, eb.dot) >= 0 ? { ...ea.dot } : { ...eb.dot };
       merged = { node: mergedNode, dot };
     } else if (ea) {
-      merged = { node: cloneNodeShallow(ea.node), dot: { ...ea.dot } };
+      merged = { node: cloneNodeShallow(ea.node, depth + 1), dot: { ...ea.dot } };
     } else {
-      merged = { node: cloneNodeShallow(eb!.node), dot: { ...eb!.dot } };
+      merged = { node: cloneNodeShallow(eb!.node, depth + 1), dot: { ...eb!.dot } };
     }
 
     // Delete-wins check: if tombstone dot >= entry dot, drop the entry.
@@ -299,7 +326,8 @@ function mergeObj(a: ObjNode, b: ObjNode): ObjNode {
   return { kind: "obj", entries, tombstone };
 }
 
-function mergeSeq(a: RgaSeq, b: RgaSeq): RgaSeq {
+function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number): RgaSeq {
+  assertTraversalDepth(depth);
   const elems = new Map<string, RgaElem>();
 
   // Union by element ID.
@@ -313,7 +341,7 @@ function mergeSeq(a: RgaSeq, b: RgaSeq): RgaSeq {
       // - tombstone: true if either side tombstoned it
       // - value: recursively merge child nodes
       // - prev/insDot should be identical (same element), use either
-      const mergedValue = mergeNode(ea.value, eb.value);
+      const mergedValue = mergeNodeAtDepth(ea.value, eb.value, depth + 1);
       elems.set(id, {
         id,
         prev: ea.prev,
@@ -322,33 +350,35 @@ function mergeSeq(a: RgaSeq, b: RgaSeq): RgaSeq {
         insDot: { ...ea.insDot },
       });
     } else if (ea) {
-      elems.set(id, cloneElem(ea));
+      elems.set(id, cloneElem(ea, depth + 1));
     } else {
-      elems.set(id, cloneElem(eb!));
+      elems.set(id, cloneElem(eb!, depth + 1));
     }
   }
 
   return { kind: "seq", elems };
 }
 
-function cloneElem(e: RgaElem): RgaElem {
+function cloneElem(e: RgaElem, depth: number): RgaElem {
+  assertTraversalDepth(depth);
   return {
     id: e.id,
     prev: e.prev,
     tombstone: e.tombstone,
-    value: cloneNodeShallow(e.value),
+    value: cloneNodeShallow(e.value, depth + 1),
     insDot: { ...e.insDot },
   };
 }
 
-function cloneNodeShallow(node: Node): Node {
+function cloneNodeShallow(node: Node, depth: number): Node {
+  assertTraversalDepth(depth);
   switch (node.kind) {
     case "lww":
       return { kind: "lww", value: structuredClone(node.value), dot: { ...node.dot } };
     case "obj": {
       const entries = new Map<string, { node: Node; dot: Dot }>();
       for (const [k, v] of node.entries) {
-        entries.set(k, { node: cloneNodeShallow(v.node), dot: { ...v.dot } });
+        entries.set(k, { node: cloneNodeShallow(v.node, depth + 1), dot: { ...v.dot } });
       }
       const tombstone = new Map<string, Dot>();
       for (const [k, d] of node.tombstone) {
@@ -359,7 +389,7 @@ function cloneNodeShallow(node: Node): Node {
     case "seq": {
       const elems = new Map<string, RgaElem>();
       for (const [id, e] of node.elems) {
-        elems.set(id, cloneElem(e));
+        elems.set(id, cloneElem(e, depth + 1));
       }
       return { kind: "seq", elems };
     }

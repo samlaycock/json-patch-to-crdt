@@ -1,5 +1,6 @@
-import { compareDot } from "./dot";
 import type { Dot, ElemId, Node, RgaElem, RgaSeq } from "./types";
+
+import { compareDot } from "./dot";
 
 export const HEAD: ElemId = "HEAD";
 
@@ -42,24 +43,29 @@ export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
 
   const idx = rgaChildrenIndex(seq);
   const out: ElemId[] = [];
-
-  function walk(prev: ElemId) {
-    const children = idx.get(prev);
-
-    if (!children) {
-      return;
-    }
-
-    for (const c of children) {
-      if (!c.tombstone) {
-        out.push(c.id);
-      }
-
-      walk(c.id);
-    }
+  const stack: Array<{ children: RgaElem[]; index: number }> = [];
+  const rootChildren = idx.get(HEAD);
+  if (rootChildren) {
+    stack.push({ children: rootChildren, index: 0 });
   }
 
-  walk(HEAD);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.index >= frame.children.length) {
+      stack.pop();
+      continue;
+    }
+
+    const child = frame.children[frame.index++]!;
+    if (!child.tombstone) {
+      out.push(child.id);
+    }
+
+    const grandchildren = idx.get(child.id);
+    if (grandchildren) {
+      stack.push({ children: grandchildren, index: 0 });
+    }
+  }
 
   linearCache.set(seq, { version: ver, ids: out });
   return out;
