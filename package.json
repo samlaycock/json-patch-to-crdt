@@ -42,6 +42,7 @@
     "fmt:check": "oxfmt . --check",
     "typecheck": "tsc --noEmit",
     "build": "tsdown --config tsdown.config.mts",
+    "bench:sequential": "bun run bench/sequential-apply.microbench.ts",
     "ci:publish": "bun run build && changeset publish"
   },
   "devDependencies": {

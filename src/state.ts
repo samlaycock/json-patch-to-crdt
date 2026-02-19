@@ -280,7 +280,7 @@ function applyPatchInternal(
       : null;
 
     for (const [opIndex, op] of patch.entries()) {
-      const baseDoc = explicitBaseState ? explicitBaseState.doc : cloneDoc(state.doc);
+      const baseDoc = explicitBaseState ? explicitBaseState.doc : state.doc;
       const step = applyPatchOpSequential(state, op, options, baseDoc, opIndex);
       if (!step.ok) {
         return step;
@@ -338,6 +338,7 @@ function applyPatchOpSequential(
     const removeRes = applySinglePatchOp(
       state,
       baseDoc,
+      baseJson,
       {
         op: "remove",
         path: op.from,
@@ -349,10 +350,12 @@ function applyPatchOpSequential(
     }
 
     // `move` resolves `path` after removal; compile/add against the post-remove head.
-    const addBase = cloneDoc(state.doc);
+    const addBase = state.doc;
+    const addBaseJson = materialize(addBase.root);
     return applySinglePatchOp(
       state,
       addBase,
+      addBaseJson,
       {
         op: "add",
         path: op.path,
@@ -372,6 +375,7 @@ function applyPatchOpSequential(
     return applySinglePatchOp(
       state,
       baseDoc,
+      baseJson,
       {
         op: "add",
         path: op.path,
@@ -381,7 +385,7 @@ function applyPatchOpSequential(
     );
   }
 
-  return applySinglePatchOp(state, baseDoc, op, options);
+  return applySinglePatchOp(state, baseDoc, baseJson, op, options);
 }
 
 function resolveValueAtPointer(
@@ -409,10 +413,10 @@ function resolveValueAtPointer(
 function applySinglePatchOp(
   state: CrdtState,
   baseDoc: Doc,
+  baseJson: JsonValue,
   op: JsonPatchOp,
   options: ApplyPatchOptions,
 ): ApplyResult {
-  const baseJson = materialize(baseDoc.root);
   const compiled = compileIntents(baseJson, [op], "sequential");
   if (!compiled.ok) {
     return compiled;

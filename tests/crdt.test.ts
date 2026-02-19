@@ -845,6 +845,41 @@ describe("clock and state", () => {
     expect(toJson(next)).toEqual({ list: [99, 1, 2] });
   });
 
+  it("supports multi-op sequential array edits against the evolving head", () => {
+    const state = createState({ list: [1, 2, 3] }, { actor: "A" });
+    const next = applyPatch(
+      state,
+      [
+        { op: "add", path: "/list/1", value: 9 },
+        { op: "replace", path: "/list/1", value: 42 },
+        { op: "remove", path: "/list/0" },
+      ],
+      {
+        semantics: "sequential",
+      },
+    );
+
+    expect(toJson(next)).toEqual({ list: [42, 2, 3] });
+  });
+
+  it("keeps sequential testAgainst base aligned with the evolving head when no explicit base", () => {
+    const state = createState({ list: [1] }, { actor: "A" });
+    const next = applyPatch(
+      state,
+      [
+        { op: "add", path: "/list/-", value: 2 },
+        { op: "test", path: "/list/1", value: 2 },
+        { op: "replace", path: "/list/1", value: 3 },
+      ],
+      {
+        semantics: "sequential",
+        testAgainst: "base",
+      },
+    );
+
+    expect(toJson(next)).toEqual({ list: [1, 3] });
+  });
+
   it("supports sequential move semantics for arrays", () => {
     const state = createState(["a", "b", "c"], { actor: "A" });
     const next = applyPatch(state, [{ op: "move", from: "/2", path: "/0" }], {
