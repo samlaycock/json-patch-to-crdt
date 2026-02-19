@@ -108,6 +108,9 @@ export type SerializedClock = { actor: ActorId; ctr: number };
 /** JSON-serializable form of a full CRDT state (document + clock). */
 export type SerializedState = { doc: SerializedDoc; clock: SerializedClock };
 
+/** Typed reasons for rejecting malformed serialized CRDT payloads. */
+export type DeserializeErrorReason = "INVALID_SERIALIZED_SHAPE" | "INVALID_SERIALIZED_INVARIANT";
+
 // ---
 
 /**

@@ -35,6 +35,7 @@ import {
   objSet,
   PatchCompileError,
   PatchError,
+  DeserializeError,
   TraversalDepthError,
   parseJsonPointer,
   stringifyJsonPointer,
@@ -1301,6 +1302,91 @@ describe("serialization", () => {
     const next = applyPatch(restored, [{ op: "replace", path: "/a", value: 2 }]);
     expect(toJson(restored)).toEqual({ a: 1 });
     expect(toJson(next)).toEqual({ a: 2 });
+  });
+
+  it("rejects sequence elements whose key does not match element id", () => {
+    const malformed = {
+      root: {
+        kind: "seq",
+        elems: {
+          "A:1": {
+            id: "A:2",
+            prev: "HEAD",
+            tombstone: false,
+            value: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            insDot: { actor: "A", ctr: 1 },
+          },
+        },
+      },
+    } as unknown as SerializedDoc;
+
+    try {
+      deserializeDoc(malformed);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+        expect(error.path).toBe("/root/elems/A:1/id");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeDoc to reject mismatched sequence ids");
+  });
+
+  it("rejects sequence elements whose prev points to a missing id", () => {
+    const malformed = {
+      root: {
+        kind: "seq",
+        elems: {
+          "A:1": {
+            id: "A:1",
+            prev: "missing",
+            tombstone: false,
+            value: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            insDot: { actor: "A", ctr: 1 },
+          },
+        },
+      },
+    } as unknown as SerializedDoc;
+
+    try {
+      deserializeDoc(malformed);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+        expect(error.path).toBe("/root/elems/A:1/prev");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeDoc to reject missing sequence predecessors");
+  });
+
+  it("rejects invalid state clock shape with typed path context", () => {
+    const malformed = {
+      doc: {
+        root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+      },
+      clock: {
+        actor: 42,
+        ctr: "bad",
+      },
+    } as unknown;
+
+    try {
+      deserializeState(malformed as never);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+        expect(error.path).toBe("/clock/actor");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeState to throw for invalid clock shape");
   });
 });
 
