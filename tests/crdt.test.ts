@@ -1651,6 +1651,44 @@ describe("applyIntentsToCrdt", () => {
     expect(materialize(headDoc.root)).toEqual(["local", "remote", "seed"]);
   });
 
+  it("returns a typed error when skewed inserts cannot be bounded without fast-forwarding", () => {
+    const baseSeq = newSeq();
+    const headSeq = newSeq();
+    const baseDoc = { root: baseSeq };
+    const headDoc = { root: headSeq };
+
+    const seedDot = dot("A", 1);
+    const seedId = dotToElemId(seedDot);
+    rgaInsertAfter(baseSeq, HEAD, seedId, seedDot, newReg("seed", seedDot));
+    rgaInsertAfter(headSeq, HEAD, seedId, seedDot, newReg("seed", seedDot));
+
+    const remoteDot = dot("B", 5_000);
+    const remoteId = dotToElemId(remoteDot);
+    rgaInsertAfter(headSeq, HEAD, remoteId, remoteDot, newReg("remote", remoteDot));
+
+    let ctr = 1;
+    let nextCalls = 0;
+    const nextDot = () => {
+      nextCalls += 1;
+      return dot("A", ++ctr);
+    };
+
+    const res = applyIntentsToCrdt(
+      baseDoc,
+      headDoc,
+      [{ t: "ArrInsert", path: [], index: 0, value: "local" }],
+      nextDot,
+    );
+
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.reason).toBe("DOT_GENERATION_EXHAUSTED");
+      expect(res.code).toBe(409);
+    }
+    expect(nextCalls).toBeLessThanOrEqual(1_500);
+    expect(materialize(headDoc.root)).toEqual(["remote", "seed"]);
+  });
+
   it("auto-creates arrays on insert at index 0 or append when base is missing", () => {
     const baseDoc = docFromJsonWithDot({}, dot("A", 0));
     const headDoc = cloneDoc(baseDoc);
