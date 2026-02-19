@@ -8,6 +8,7 @@ export type {
   ApplyPatchOptions,
   CrdtState,
   DiffOptions,
+  DeserializeErrorReason,
   ForkStateOptions,
   JsonPatch,
   JsonPatchOp,
@@ -40,7 +41,7 @@ export {
 export { diffJsonPatch } from "./patch";
 
 // Serialization
-export { serializeState, deserializeState } from "./serialize";
+export { DeserializeError, serializeState, deserializeState } from "./serialize";
 
 // Merge
 export { MergeError, mergeState, tryMergeState } from "./merge";
