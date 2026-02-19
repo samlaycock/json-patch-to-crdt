@@ -24,6 +24,25 @@ export class PatchCompileError extends Error {
   }
 }
 
+export type JsonLookupErrorCode =
+  | "EXPECTED_ARRAY_INDEX"
+  | "INDEX_OUT_OF_BOUNDS"
+  | "MISSING_KEY"
+  | "NON_CONTAINER";
+
+/** Structured lookup error thrown by `getAtJson`. */
+export class JsonLookupError extends Error {
+  readonly code: JsonLookupErrorCode;
+  readonly segment: string;
+
+  constructor(code: JsonLookupErrorCode, segment: string, message: string) {
+    super(message);
+    this.name = "JsonLookupError";
+    this.code = code;
+    this.segment = segment;
+  }
+}
+
 /**
  * Parse an RFC 6901 JSON Pointer into a path array, unescaping `~1` and `~0`.
  * @param ptr - A JSON Pointer string (e.g. `"/a/b"` or `""`).
@@ -91,24 +110,32 @@ export function getAtJson(base: JsonValue, path: string[]): JsonValue {
   for (const seg of path) {
     if (Array.isArray(cur)) {
       if (!ARRAY_INDEX_TOKEN_PATTERN.test(seg)) {
-        throw new Error(`Expected array index, got ${seg}`);
+        throw new JsonLookupError(
+          "EXPECTED_ARRAY_INDEX",
+          seg,
+          `Expected array index, got '${seg}'`,
+        );
       }
 
       const idx = Number(seg);
 
       if (idx < 0 || idx >= cur.length) {
-        throw new Error(`Index out of bounds at ${seg}`);
+        throw new JsonLookupError("INDEX_OUT_OF_BOUNDS", seg, `Index out of bounds at '${seg}'`);
       }
 
       cur = cur[idx];
     } else if (cur && typeof cur === "object") {
       if (!(seg in cur)) {
-        throw new Error(`Missing key ${seg}`);
+        throw new JsonLookupError("MISSING_KEY", seg, `Missing key '${seg}'`);
       }
 
       cur = cur[seg];
     } else {
-      throw new Error(`Cannot traverse into non-container at ${seg}`);
+      throw new JsonLookupError(
+        "NON_CONTAINER",
+        seg,
+        `Cannot traverse into non-container at '${seg}'`,
+      );
     }
   }
 
@@ -673,24 +700,22 @@ export function mapLookupErrorToPatchReason(error: unknown): {
   reason: PatchErrorReason;
   message: string;
 } {
+  if (error instanceof JsonLookupError) {
+    switch (error.code) {
+      case "EXPECTED_ARRAY_INDEX":
+        return { reason: "INVALID_POINTER", message: error.message };
+      case "INDEX_OUT_OF_BOUNDS":
+        return { reason: "OUT_OF_BOUNDS", message: error.message };
+      case "MISSING_KEY":
+        return { reason: "MISSING_PARENT", message: error.message };
+      case "NON_CONTAINER":
+        return { reason: "INVALID_TARGET", message: error.message };
+      default:
+        return { reason: "INVALID_PATCH", message: error.message };
+    }
+  }
+
   const message = error instanceof Error ? error.message : "invalid path";
-
-  if (message.includes("Expected array index")) {
-    return { reason: "INVALID_POINTER", message };
-  }
-
-  if (message.includes("Index out of bounds")) {
-    return { reason: "OUT_OF_BOUNDS", message };
-  }
-
-  if (message.includes("Missing key")) {
-    return { reason: "MISSING_PARENT", message };
-  }
-
-  if (message.includes("Cannot traverse into non-container")) {
-    return { reason: "INVALID_TARGET", message };
-  }
-
   return { reason: "INVALID_PATCH", message };
 }
 
