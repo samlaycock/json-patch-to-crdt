@@ -2635,6 +2635,82 @@ describe("mergeDoc", () => {
     expect(materialize(merged.root)).toEqual([1, 1]);
   });
 
+  it("rejects shared RGA ids when predecessor metadata disagrees", () => {
+    const origin = createState({ list: ["a", "b"] }, { actor: "origin" });
+    const a = cloneDoc(origin.doc);
+    const b = cloneDoc(origin.doc);
+
+    if (a.root.kind !== "obj" || b.root.kind !== "obj") {
+      throw new Error("Expected object roots");
+    }
+    const seqA = a.root.entries.get("list")?.node;
+    const seqB = b.root.entries.get("list")?.node;
+    if (!seqA || !seqB || seqA.kind !== "seq" || seqB.kind !== "seq") {
+      throw new Error("Expected list sequences");
+    }
+
+    const ids = rgaLinearizeIds(seqA);
+    const secondId = ids[1];
+    if (!secondId) {
+      throw new Error("Expected second element id");
+    }
+
+    const corrupted = seqB.elems.get(secondId);
+    if (!corrupted) {
+      throw new Error("Expected shared element in second sequence");
+    }
+    corrupted.prev = HEAD;
+
+    const res = tryMergeDoc(a, b);
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+      expect(res.error.path).toBe("/list");
+      expect(res.error.message).toContain("prev");
+      expect(res.error.message).toContain(secondId);
+    }
+
+    expect(() => mergeDoc(a, b)).toThrow(MergeError);
+  });
+
+  it("rejects shared RGA ids when insertion dots disagree", () => {
+    const origin = createState({ list: ["a", "b"] }, { actor: "origin" });
+    const a = cloneDoc(origin.doc);
+    const b = cloneDoc(origin.doc);
+
+    if (a.root.kind !== "obj" || b.root.kind !== "obj") {
+      throw new Error("Expected object roots");
+    }
+    const seqA = a.root.entries.get("list")?.node;
+    const seqB = b.root.entries.get("list")?.node;
+    if (!seqA || !seqB || seqA.kind !== "seq" || seqB.kind !== "seq") {
+      throw new Error("Expected list sequences");
+    }
+
+    const ids = rgaLinearizeIds(seqA);
+    const secondId = ids[1];
+    if (!secondId) {
+      throw new Error("Expected second element id");
+    }
+
+    const corrupted = seqB.elems.get(secondId);
+    if (!corrupted) {
+      throw new Error("Expected shared element in second sequence");
+    }
+    corrupted.insDot = { ...corrupted.insDot, ctr: corrupted.insDot.ctr + 1 };
+
+    const res = tryMergeDoc(a, b);
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+      expect(res.error.path).toBe("/list");
+      expect(res.error.message).toContain("insDot");
+      expect(res.error.message).toContain(secondId);
+    }
+
+    expect(() => mergeDoc(a, b)).toThrow(MergeError);
+  });
+
   it("is commutative: merge(a,b) equals merge(b,a)", () => {
     const a = docFromJson({ x: 1, y: 2 }, newDotGen("A"));
     const b = docFromJson({ x: 3, z: 4 }, newDotGen("B"));
