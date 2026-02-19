@@ -178,6 +178,7 @@ export type PatchErrorReason =
   | "OUT_OF_BOUNDS"
   | "TEST_FAILED"
   | "INVALID_MOVE"
+  | "MAX_DEPTH_EXCEEDED"
   | "LINEAGE_MISMATCH";
 
 /** Structured conflict payload used by non-throwing APIs. */

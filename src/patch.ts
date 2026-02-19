@@ -1,4 +1,3 @@
-import { ROOT_KEY } from "./types";
 import type {
   CompilePatchOptions,
   DiffOptions,
@@ -7,6 +6,8 @@ import type {
   JsonValue,
   PatchErrorReason,
 } from "./types";
+
+import { ROOT_KEY } from "./types";
 
 /** Structured compile error used to map patch validation failures to typed reasons. */
 export class PatchCompileError extends Error {

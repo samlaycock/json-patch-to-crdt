@@ -1,13 +1,3 @@
-import { createClock, cloneClock } from "./clock";
-import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
-import { materialize } from "./materialize";
-import {
-  PatchCompileError,
-  compileJsonPatchToIntent,
-  getAtJson,
-  mapLookupErrorToPatchReason,
-  parseJsonPointer,
-} from "./patch";
 import type {
   ApplyError,
   ActorId,
@@ -30,6 +20,18 @@ import type {
   ValidatePatchResult,
   VersionVector,
 } from "./types";
+
+import { createClock, cloneClock } from "./clock";
+import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
+import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
+import { materialize } from "./materialize";
+import {
+  PatchCompileError,
+  compileJsonPatchToIntent,
+  getAtJson,
+  mapLookupErrorToPatchReason,
+  parseJsonPointer,
+} from "./patch";
 
 /** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
 export class PatchError extends Error {
@@ -158,9 +160,13 @@ export function tryApplyPatch(
     clock: cloneClock(state.clock),
   };
 
-  const result = applyPatchInternal(nextState, patch, options);
-  if (!result.ok) {
-    return { ok: false, error: result };
+  try {
+    const result = applyPatchInternal(nextState, patch, options);
+    if (!result.ok) {
+      return { ok: false, error: result };
+    }
+  } catch (error) {
+    return { ok: false, error: toApplyError(error) };
   }
 
   return { ok: true, state: nextState };
@@ -185,9 +191,13 @@ export function tryApplyPatchInPlace(
     return { ok: true };
   }
 
-  const result = applyPatchInternal(state, patch, applyOptions);
-  if (!result.ok) {
-    return { ok: false, error: result };
+  try {
+    const result = applyPatchInternal(state, patch, applyOptions);
+    if (!result.ok) {
+      return { ok: false, error: result };
+    }
+  } catch (error) {
+    return { ok: false, error: toApplyError(error) };
   }
 
   return { ok: true };
@@ -442,49 +452,52 @@ function compileIntents(
 }
 
 function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
-  switch (node.kind) {
-    case "lww":
-      return node.dot.actor === actor ? node.dot.ctr : 0;
-    case "obj": {
-      let best = 0;
-      for (const entry of node.entries.values()) {
+  let best = 0;
+  const stack: Array<{ node: Node; depth: number }> = [{ node, depth: 0 }];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    assertTraversalDepth(frame.depth);
+
+    if (frame.node.kind === "lww") {
+      if (frame.node.dot.actor === actor && frame.node.dot.ctr > best) {
+        best = frame.node.dot.ctr;
+      }
+      continue;
+    }
+
+    if (frame.node.kind === "obj") {
+      for (const entry of frame.node.entries.values()) {
         if (entry.dot.actor === actor && entry.dot.ctr > best) {
           best = entry.dot.ctr;
         }
-
-        const childBest = maxCtrInNodeForActor(entry.node, actor);
-        if (childBest > best) {
-          best = childBest;
-        }
+        stack.push({ node: entry.node, depth: frame.depth + 1 });
       }
 
-      for (const tomb of node.tombstone.values()) {
+      for (const tomb of frame.node.tombstone.values()) {
         if (tomb.actor === actor && tomb.ctr > best) {
           best = tomb.ctr;
         }
       }
-
-      return best;
+      continue;
     }
-    case "seq": {
-      let best = 0;
-      for (const elem of node.elems.values()) {
-        if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
-          best = elem.insDot.ctr;
-        }
 
-        const childBest = maxCtrInNodeForActor(elem.value, actor);
-        if (childBest > best) {
-          best = childBest;
-        }
+    for (const elem of frame.node.elems.values()) {
+      if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
+        best = elem.insDot.ctr;
       }
-
-      return best;
+      stack.push({ node: elem.value, depth: frame.depth + 1 });
     }
   }
+
+  return best;
 }
 
 function toApplyError(error: unknown): ApplyError {
+  if (error instanceof TraversalDepthError) {
+    return toDepthApplyError(error);
+  }
+
   if (error instanceof PatchCompileError) {
     return {
       ok: false,

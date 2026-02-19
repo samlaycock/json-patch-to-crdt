@@ -8,6 +8,7 @@ import type {
   SerializedRgaElem,
   SerializedState,
 } from "./types";
+
 import { createClock } from "./clock";
 
 /** Serialize a CRDT document to a JSON-safe representation (Maps become plain objects). */
