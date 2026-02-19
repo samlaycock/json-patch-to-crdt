@@ -524,6 +524,7 @@ function applyArrInsert(
   newDot: () => Dot,
   bumpCounterAbove?: (ctr: number) => void,
 ): ApplyResult | null {
+  const pointer = `/${it.path.join("/")}`;
   const baseSeq = getSeqAtPath(base, it.path);
 
   if (!baseSeq) {
@@ -531,7 +532,12 @@ function applyArrInsert(
       const headSeq = ensureSeqAtPath(head, it.path, newDot());
       const prev =
         it.index === 0 ? HEAD : rgaPrevForInsertAtIndex(headSeq, Number.MAX_SAFE_INTEGER);
-      const d = nextInsertDotForPrev(headSeq, prev, newDot, bumpCounterAbove);
+      const dotRes = nextInsertDotForPrev(headSeq, prev, newDot, pointer, bumpCounterAbove);
+      if (!dotRes.ok) {
+        return dotRes;
+      }
+
+      const d = dotRes.dot;
       const id = dotToElemId(d);
       rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot));
       return null;
@@ -542,7 +548,7 @@ function applyArrInsert(
       code: 409,
       reason: "MISSING_PARENT",
       message: `base array missing at /${it.path.join("/")}`,
-      path: `/${it.path.join("/")}`,
+      path: pointer,
     };
   }
 
@@ -561,7 +567,12 @@ function applyArrInsert(
   }
 
   const prev = idx === 0 ? HEAD : (rgaIdAtIndex(baseSeq, idx - 1) ?? HEAD);
-  const d = nextInsertDotForPrev(headSeq, prev, newDot, bumpCounterAbove);
+  const dotRes = nextInsertDotForPrev(headSeq, prev, newDot, pointer, bumpCounterAbove);
+  if (!dotRes.ok) {
+    return dotRes;
+  }
+
+  const d = dotRes.dot;
   const id = dotToElemId(d);
   rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot));
 
@@ -572,8 +583,10 @@ function nextInsertDotForPrev(
   seq: RgaSeq,
   prev: ElemId,
   newDot: () => Dot,
+  path: string,
   bumpCounterAbove?: (ctr: number) => void,
-): Dot {
+): { ok: true; dot: Dot } | ApplyError {
+  const MAX_INSERT_DOT_ATTEMPTS = 1_024;
   let maxSiblingDot: Dot | null = null;
   for (const elem of seq.elems.values()) {
     if (elem.prev !== prev) {
@@ -591,13 +604,25 @@ function nextInsertDotForPrev(
     bumpCounterAbove?.(maxSiblingDot.ctr);
   }
 
-  let candidate = newDot();
-  // Preserve deterministic "latest insert first" sibling ordering in linearization.
-  while (maxSiblingDot && compareDot(candidate, maxSiblingDot) <= 0) {
-    candidate = newDot();
+  if (!maxSiblingDot) {
+    return { ok: true, dot: newDot() };
   }
 
-  return candidate;
+  // Preserve deterministic "latest insert first" sibling ordering in linearization.
+  for (let attempts = 0; attempts < MAX_INSERT_DOT_ATTEMPTS; attempts++) {
+    const candidate = newDot();
+    if (compareDot(candidate, maxSiblingDot) > 0) {
+      return { ok: true, dot: candidate };
+    }
+  }
+
+  return {
+    ok: false,
+    code: 409,
+    reason: "DOT_GENERATION_EXHAUSTED",
+    message: `failed to generate insert dot within ${MAX_INSERT_DOT_ATTEMPTS} attempts`,
+    path,
+  };
 }
 
 function applyArrDelete(

@@ -178,6 +178,7 @@ export type PatchErrorReason =
   | "OUT_OF_BOUNDS"
   | "TEST_FAILED"
   | "INVALID_MOVE"
+  | "DOT_GENERATION_EXHAUSTED"
   | "MAX_DEPTH_EXCEEDED"
   | "LINEAGE_MISMATCH";
 
