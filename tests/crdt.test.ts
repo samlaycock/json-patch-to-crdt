@@ -969,6 +969,30 @@ describe("clock and state", () => {
     }
   });
 
+  it("maps lookup invalid array index tokens to INVALID_POINTER", () => {
+    const state = createState({ list: [1] }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "copy", from: "/list/x", path: "/c" }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_POINTER");
+      expect(result.error.path).toBe("/list/x");
+      expect(result.error.opIndex).toBe(0);
+    }
+  });
+
+  it("maps lookup non-container traversal to INVALID_TARGET", () => {
+    const state = createState({ num: 1 }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "copy", from: "/num/x", path: "/c" }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_TARGET");
+      expect(result.error.path).toBe("/num/x");
+      expect(result.error.opIndex).toBe(0);
+    }
+  });
+
   it("throws PatchError with typed metadata when move source is missing", () => {
     const state = createState({ a: 1 }, { actor: "A" });
 
