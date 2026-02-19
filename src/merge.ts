@@ -20,6 +20,16 @@ import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot } from "./dot";
 
+class SharedElementMetadataMismatchError extends Error {
+  readonly path: string;
+
+  constructor(path: string, id: string, field: "prev" | "insDot") {
+    super(`shared RGA element '${id}' has conflicting ${field} metadata`);
+    this.name = "SharedElementMetadataMismatchError";
+    this.path = path;
+  }
+}
+
 /** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
 export class MergeError extends Error {
   readonly code: 409;
@@ -77,6 +87,19 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
 
     return { ok: true, doc: { root: mergeNode(a.root, b.root) } };
   } catch (error) {
+    if (error instanceof SharedElementMetadataMismatchError) {
+      return {
+        ok: false,
+        error: {
+          ok: false,
+          code: 409,
+          reason: "LINEAGE_MISMATCH",
+          message: error.message,
+          path: error.path,
+        },
+      };
+    }
+
     if (error instanceof TraversalDepthError) {
       return { ok: false, error: toDepthApplyError(error) };
     }
@@ -254,16 +277,16 @@ function repDot(node: Node): Dot {
 }
 
 function mergeNode(a: Node, b: Node): Node {
-  return mergeNodeAtDepth(a, b, 0);
+  return mergeNodeAtDepth(a, b, 0, []);
 }
 
-function mergeNodeAtDepth(a: Node, b: Node, depth: number): Node {
+function mergeNodeAtDepth(a: Node, b: Node, depth: number, path: string[]): Node {
   assertTraversalDepth(depth);
 
   // Same kind → merge semantics
   if (a.kind === "lww" && b.kind === "lww") return mergeLww(a, b);
-  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b, depth + 1);
-  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, depth + 1);
+  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b, depth + 1, path);
+  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, depth + 1, path);
 
   // Kind mismatch: higher representative dot wins entirely.
   const cmp = compareDot(repDot(a), repDot(b));
@@ -278,7 +301,7 @@ function mergeLww(a: LwwReg, b: LwwReg): LwwReg {
   return { kind: "lww", value: structuredClone(b.value), dot: { ...b.dot } };
 }
 
-function mergeObj(a: ObjNode, b: ObjNode, depth: number): ObjNode {
+function mergeObj(a: ObjNode, b: ObjNode, depth: number, path: string[]): ObjNode {
   assertTraversalDepth(depth);
   const entries = new Map<string, { node: Node; dot: Dot }>();
   const tombstone = new Map<string, Dot>();
@@ -305,7 +328,7 @@ function mergeObj(a: ObjNode, b: ObjNode, depth: number): ObjNode {
 
     let merged: { node: Node; dot: Dot };
     if (ea && eb) {
-      const mergedNode = mergeNodeAtDepth(ea.node, eb.node, depth + 1);
+      const mergedNode = mergeNodeAtDepth(ea.node, eb.node, depth + 1, [...path, key]);
       const dot = compareDot(ea.dot, eb.dot) >= 0 ? { ...ea.dot } : { ...eb.dot };
       merged = { node: mergedNode, dot };
     } else if (ea) {
@@ -326,7 +349,7 @@ function mergeObj(a: ObjNode, b: ObjNode, depth: number): ObjNode {
   return { kind: "obj", entries, tombstone };
 }
 
-function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number): RgaSeq {
+function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number, path: string[]): RgaSeq {
   assertTraversalDepth(depth);
   const elems = new Map<string, RgaElem>();
 
@@ -337,11 +360,19 @@ function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number): RgaSeq {
     const eb = b.elems.get(id);
 
     if (ea && eb) {
+      if (ea.prev !== eb.prev) {
+        throw new SharedElementMetadataMismatchError(toPointer(path), id, "prev");
+      }
+
+      if (!sameDot(ea.insDot, eb.insDot)) {
+        throw new SharedElementMetadataMismatchError(toPointer(path), id, "insDot");
+      }
+
       // Both sides have this element. Merge:
       // - tombstone: true if either side tombstoned it
       // - value: recursively merge child nodes
-      // - prev/insDot should be identical (same element), use either
-      const mergedValue = mergeNodeAtDepth(ea.value, eb.value, depth + 1);
+      // - prev/insDot are validated to match before merge
+      const mergedValue = mergeNodeAtDepth(ea.value, eb.value, depth + 1, [...path, id]);
       elems.set(id, {
         id,
         prev: ea.prev,
@@ -357,6 +388,18 @@ function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number): RgaSeq {
   }
 
   return { kind: "seq", elems };
+}
+
+function sameDot(a: Dot, b: Dot): boolean {
+  return a.actor === b.actor && a.ctr === b.ctr;
+}
+
+function toPointer(path: string[]): string {
+  if (path.length === 0) {
+    return "/";
+  }
+
+  return `/${path.join("/")}`;
 }
 
 function cloneElem(e: RgaElem, depth: number): RgaElem {
