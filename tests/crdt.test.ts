@@ -35,6 +35,7 @@ import {
   objSet,
   PatchCompileError,
   PatchError,
+  TraversalDepthError,
   parseJsonPointer,
   stringifyJsonPointer,
   rgaDelete,
@@ -46,6 +47,7 @@ import {
   deserializeDoc,
   deserializeState,
   mergeDoc,
+  MergeError,
   mergeState,
   tryMergeDoc,
   tryMergeState,
@@ -55,6 +57,7 @@ import {
   type Dot,
   type SerializedDoc,
   type IntentOp,
+  MAX_TRAVERSAL_DEPTH,
   ROOT_KEY,
   HEAD,
   type CrdtState,
@@ -311,6 +314,56 @@ function dot(actor: string, ctr: number): Dot {
 function newDotGen(actor = "A", start = 0) {
   let ctr = start;
   return () => ({ actor, ctr: ++ctr });
+}
+
+function makeDeepObject(depth: number, leaf: JsonValue): JsonValue {
+  let value = leaf;
+  for (let i = 0; i < depth; i++) {
+    value = { child: value };
+  }
+  return value;
+}
+
+function readDeepObjectLeaf(value: JsonValue, depth: number): JsonValue {
+  let current = value;
+  for (let i = 0; i < depth; i++) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      throw new Error(`expected object at depth ${i}`);
+    }
+
+    const next = (current as Record<string, JsonValue>).child;
+    if (next === undefined) {
+      throw new Error(`missing child at depth ${i}`);
+    }
+
+    current = next;
+  }
+
+  return current;
+}
+
+function makeDeepObjectNode(depth: number, leaf: JsonValue, actor = "A"): Doc["root"] {
+  if (depth === 0) {
+    return newReg(leaf, dot(actor, 1));
+  }
+
+  const root = newObj();
+  let current = root;
+  let ctr = 0;
+
+  for (let i = 0; i < depth; i++) {
+    const entryDot = dot(actor, ++ctr);
+    if (i === depth - 1) {
+      objSet(current, "child", newReg(leaf, dot(actor, ++ctr)), entryDot);
+      break;
+    }
+
+    const child = newObj();
+    objSet(current, "child", child, entryDot);
+    current = child;
+  }
+
+  return root;
 }
 
 type SyncRecord = {
@@ -628,6 +681,19 @@ describe("clock and state", () => {
     expect(state.clock.ctr).toBe(1);
   });
 
+  it("handles deeply nested objects in createState and toJson", () => {
+    const depth = 8_000;
+    const deepValue = makeDeepObject(depth, "leaf");
+    const state = createState(deepValue, { actor: "A" });
+    const result = toJson(state);
+    expect(readDeepObjectLeaf(result, depth)).toBe("leaf");
+  });
+
+  it("throws a typed depth error for unsupported createState nesting", () => {
+    const tooDeep = makeDeepObject(MAX_TRAVERSAL_DEPTH + 1, "leaf");
+    expect(() => createState(tooDeep, { actor: "A" })).toThrow(TraversalDepthError);
+  });
+
   it("forks shared-origin replicas with independent actors", () => {
     const origin = createState({ list: ["a"] }, { actor: "origin" });
     const peerA = forkState(origin, "A");
@@ -663,6 +729,38 @@ describe("clock and state", () => {
     const next = applyPatch(state, [{ op: "add", path: "/list/-", value: "b" }]);
     expect(toJson(state)).toEqual({ list: ["a"] });
     expect(toJson(next)).toEqual({ list: ["a", "b"] });
+  });
+
+  it("applies patches over deeply nested state without overflowing", () => {
+    const depth = 8_000;
+    const state = createState(makeDeepObject(depth, "base"), { actor: "A" });
+    const next = applyPatch(state, [{ op: "add", path: "/status", value: "ok" }]);
+    const result = toJson(next) as Record<string, JsonValue>;
+    expect(result.status).toBe("ok");
+    expect(readDeepObjectLeaf(result, depth)).toBe("base");
+  });
+
+  it("returns typed depth errors when patch values exceed max depth", () => {
+    const state = createState({}, { actor: "A" });
+    const patch = [
+      { op: "add", path: "/value", value: makeDeepObject(MAX_TRAVERSAL_DEPTH + 1, 1) },
+    ] as const;
+
+    const nonThrowing = tryApplyPatch(state, patch as unknown as JsonPatchOp[]);
+    expect(nonThrowing.ok).toBeFalse();
+    if (!nonThrowing.ok) {
+      expect(nonThrowing.error.reason).toBe("MAX_DEPTH_EXCEEDED");
+    }
+
+    expect(() => applyPatch(state, patch as unknown as JsonPatchOp[])).toThrow(PatchError);
+    try {
+      applyPatch(state, patch as unknown as JsonPatchOp[]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchError);
+      if (error instanceof PatchError) {
+        expect(error.reason).toBe("MAX_DEPTH_EXCEEDED");
+      }
+    }
   });
 
   it("throws PatchError when a patch fails", () => {
@@ -1131,6 +1229,18 @@ describe("materialize", () => {
     const nextDot = newDotGen("A", 0);
     const doc = docFromJson(value, nextDot);
     expect(materialize(doc.root)).toEqual(value);
+  });
+
+  it("materializes deeply nested object nodes", () => {
+    const depth = 8_000;
+    const root = makeDeepObjectNode(depth, "leaf");
+    const value = materialize(root);
+    expect(readDeepObjectLeaf(value, depth)).toBe("leaf");
+  });
+
+  it("throws typed depth errors for unsupported materialize nesting", () => {
+    const root = makeDeepObjectNode(MAX_TRAVERSAL_DEPTH + 1, "leaf");
+    expect(() => materialize(root)).toThrow(TraversalDepthError);
   });
 });
 
@@ -2482,6 +2592,42 @@ describe("mergeState", () => {
     expect(res.ok).toBeFalse();
     if (!res.ok) {
       expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+    }
+  });
+
+  it("merges deeply nested object states without stack overflow", () => {
+    const depth = 8_000;
+    const a = createState(makeDeepObject(depth, 1), { actor: "A" });
+    const b = createState(makeDeepObject(depth, 2), { actor: "B" });
+    const merged = mergeState(a, b);
+    const result = toJson(merged);
+    expect(readDeepObjectLeaf(result, depth)).toBe(2);
+  });
+
+  it("returns typed depth errors for unsupported merge depth", () => {
+    const a: CrdtState = {
+      doc: { root: makeDeepObjectNode(MAX_TRAVERSAL_DEPTH + 1, 1, "A") },
+      clock: createClock("A", 0),
+    };
+    const b: CrdtState = {
+      doc: { root: makeDeepObjectNode(MAX_TRAVERSAL_DEPTH + 1, 2, "B") },
+      clock: createClock("B", 0),
+    };
+
+    const nonThrowing = tryMergeState(a, b);
+    expect(nonThrowing.ok).toBeFalse();
+    if (!nonThrowing.ok) {
+      expect(nonThrowing.error.reason).toBe("MAX_DEPTH_EXCEEDED");
+    }
+
+    expect(() => mergeState(a, b)).toThrow(MergeError);
+    try {
+      mergeState(a, b);
+    } catch (error) {
+      expect(error).toBeInstanceOf(MergeError);
+      if (error instanceof MergeError) {
+        expect(error.reason).toBe("MAX_DEPTH_EXCEEDED");
+      }
     }
   });
 

@@ -44,3 +44,6 @@ export { serializeState, deserializeState } from "./serialize";
 
 // Merge
 export { MergeError, mergeState, tryMergeState } from "./merge";
+
+// Traversal limits
+export { MAX_TRAVERSAL_DEPTH, TraversalDepthError } from "./depth";

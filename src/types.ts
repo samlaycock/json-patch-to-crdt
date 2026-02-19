@@ -179,6 +179,7 @@ export type PatchErrorReason =
   | "TEST_FAILED"
   | "INVALID_MOVE"
   | "DOT_GENERATION_EXHAUSTED"
+  | "MAX_DEPTH_EXCEEDED"
   | "LINEAGE_MISMATCH";
 
 /** Structured conflict payload used by non-throwing APIs. */

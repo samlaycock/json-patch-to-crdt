@@ -1,3 +1,21 @@
+import type {
+  ApplyError,
+  ApplyResult,
+  DiffOptions,
+  Doc,
+  Dot,
+  ElemId,
+  IntentOp,
+  JsonPatchToCrdtOptions,
+  JsonPatchOp,
+  JsonValue,
+  Node,
+  ObjNode,
+  RgaElem,
+  RgaSeq,
+} from "./types";
+
+import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot, dotToElemId } from "./dot";
 import { materialize } from "./materialize";
 import { newObj, newReg, newSeq, objRemove, objSet } from "./nodes";
@@ -18,22 +36,6 @@ import {
   rgaPrevForInsertAtIndex,
 } from "./rga";
 import { ROOT_KEY } from "./types";
-import type {
-  ApplyError,
-  ApplyResult,
-  DiffOptions,
-  Doc,
-  Dot,
-  ElemId,
-  IntentOp,
-  JsonPatchToCrdtOptions,
-  JsonPatchOp,
-  JsonValue,
-  Node,
-  ObjNode,
-  RgaElem,
-  RgaSeq,
-} from "./types";
 
 /**
  * Create a CRDT document from a JSON value, using fresh dots for each node.
@@ -174,6 +176,11 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 }
 
 function deepNodeFromJson(value: JsonValue, dot: Dot): Node {
+  return deepNodeFromJsonWithDepth(value, dot, 0);
+}
+
+function deepNodeFromJsonWithDepth(value: JsonValue, dot: Dot, depth: number): Node {
+  assertTraversalDepth(depth);
   // For KV ergonomics we store subtrees structurally:
   // - objects/arrays become CRDT containers
   // - primitives become LWW reg
@@ -195,46 +202,151 @@ function deepNodeFromJson(value: JsonValue, dot: Dot): Node {
     for (const v of value) {
       const childDot: Dot = { actor: dot.actor, ctr: ++ctr };
       const id = dotToElemId(childDot);
-      rgaInsertAfter(seq, prev, id, childDot, deepNodeFromJson(v, childDot));
+      rgaInsertAfter(seq, prev, id, childDot, deepNodeFromJsonWithDepth(v, childDot, depth + 1));
       prev = id;
     }
     return seq;
   }
   const obj = newObj();
   for (const [k, v] of Object.entries(value)) {
-    objSet(obj, k, deepNodeFromJson(v, dot), dot);
+    objSet(obj, k, deepNodeFromJsonWithDepth(v, dot, depth + 1), dot);
   }
   return obj;
 }
 
 function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
+  if (isJsonPrimitive(value)) {
     return newReg(value, nextDot());
   }
 
+  const root = Array.isArray(value) ? newSeq() : newObj();
+  type ObjFrame = {
+    kind: "obj";
+    depth: number;
+    entries: Array<[string, JsonValue]>;
+    index: number;
+    target: ObjNode;
+  };
+  type SeqFrame = {
+    kind: "seq";
+    depth: number;
+    values: JsonValue[];
+    index: number;
+    prev: ElemId;
+    target: RgaSeq;
+  };
+  type Frame = ObjFrame | SeqFrame;
+
+  const stack: Frame[] = [];
   if (Array.isArray(value)) {
-    const seq = newSeq();
-    let prev = HEAD;
-    for (const v of value) {
-      const insDot = nextDot();
-      const id = dotToElemId(insDot);
-      rgaInsertAfter(seq, prev, id, insDot, nodeFromJson(v, nextDot));
-      prev = id;
-    }
-    return seq;
+    stack.push({
+      kind: "seq",
+      depth: 0,
+      values: value,
+      index: 0,
+      prev: HEAD,
+      target: root as RgaSeq,
+    });
+  } else {
+    stack.push({
+      kind: "obj",
+      depth: 0,
+      entries: Object.entries(value),
+      index: 0,
+      target: root as ObjNode,
+    });
   }
 
-  const obj = newObj();
-  for (const [k, v] of Object.entries(value)) {
-    const entryDot = nextDot();
-    objSet(obj, k, nodeFromJson(v, nextDot), entryDot);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.kind === "obj") {
+      if (frame.index >= frame.entries.length) {
+        stack.pop();
+        continue;
+      }
+
+      const [key, childValue] = frame.entries[frame.index++]!;
+      const childDepth = frame.depth + 1;
+      assertTraversalDepth(childDepth);
+
+      const entryDot = nextDot();
+      if (isJsonPrimitive(childValue)) {
+        objSet(frame.target, key, newReg(childValue, nextDot()), entryDot);
+        continue;
+      }
+
+      if (Array.isArray(childValue)) {
+        const childSeq = newSeq();
+        objSet(frame.target, key, childSeq, entryDot);
+        stack.push({
+          kind: "seq",
+          depth: childDepth,
+          values: childValue,
+          index: 0,
+          prev: HEAD,
+          target: childSeq,
+        });
+        continue;
+      }
+
+      const childObj = newObj();
+      objSet(frame.target, key, childObj, entryDot);
+      stack.push({
+        kind: "obj",
+        depth: childDepth,
+        entries: Object.entries(childValue),
+        index: 0,
+        target: childObj,
+      });
+      continue;
+    }
+
+    if (frame.index >= frame.values.length) {
+      stack.pop();
+      continue;
+    }
+
+    const childValue = frame.values[frame.index++]!;
+    const childDepth = frame.depth + 1;
+    assertTraversalDepth(childDepth);
+
+    const insDot = nextDot();
+    const id = dotToElemId(insDot);
+
+    if (isJsonPrimitive(childValue)) {
+      rgaInsertAfter(frame.target, frame.prev, id, insDot, newReg(childValue, nextDot()));
+      frame.prev = id;
+      continue;
+    }
+
+    if (Array.isArray(childValue)) {
+      const childSeq = newSeq();
+      rgaInsertAfter(frame.target, frame.prev, id, insDot, childSeq);
+      frame.prev = id;
+      stack.push({
+        kind: "seq",
+        depth: childDepth,
+        values: childValue,
+        index: 0,
+        prev: HEAD,
+        target: childSeq,
+      });
+      continue;
+    }
+
+    const childObj = newObj();
+    rgaInsertAfter(frame.target, frame.prev, id, insDot, childObj);
+    frame.prev = id;
+    stack.push({
+      kind: "obj",
+      depth: childDepth,
+      entries: Object.entries(childValue),
+      index: 0,
+      target: childObj,
+    });
   }
-  return obj;
+
+  return root;
 }
 
 /** Deep-clone a CRDT document. The clone is fully independent of the original. */
@@ -243,6 +355,11 @@ export function cloneDoc(doc: Doc): Doc {
 }
 
 function cloneNode(node: Node): Node {
+  return cloneNodeAtDepth(node, 0);
+}
+
+function cloneNodeAtDepth(node: Node, depth: number): Node {
+  assertTraversalDepth(depth);
   if (node.kind === "lww") {
     return {
       kind: "lww",
@@ -255,7 +372,7 @@ function cloneNode(node: Node): Node {
     const entries = new Map<string, { node: Node; dot: Dot }>();
     for (const [k, v] of node.entries.entries()) {
       entries.set(k, {
-        node: cloneNode(v.node),
+        node: cloneNodeAtDepth(v.node, depth + 1),
         dot: { actor: v.dot.actor, ctr: v.dot.ctr },
       });
     }
@@ -278,12 +395,21 @@ function cloneNode(node: Node): Node {
       id: e.id,
       prev: e.prev,
       tombstone: e.tombstone,
-      value: cloneNode(e.value),
+      value: cloneNodeAtDepth(e.value, depth + 1),
       insDot: { actor: e.insDot.actor, ctr: e.insDot.ctr },
     });
   }
 
   return { kind: "seq", elems };
+}
+
+function isJsonPrimitive(value: JsonValue): value is null | string | number | boolean {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
 }
 
 // ── Per-intent handlers ─────────────────────────────────────────────
@@ -896,6 +1022,10 @@ function isJsonPatchToCrdtOptions(value: unknown): value is JsonPatchToCrdtOptio
 }
 
 function toApplyError(error: unknown): ApplyError {
+  if (error instanceof TraversalDepthError) {
+    return toDepthApplyError(error);
+  }
+
   if (error instanceof PatchCompileError) {
     return {
       ok: false,
