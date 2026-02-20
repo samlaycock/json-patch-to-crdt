@@ -36,6 +36,9 @@ export {
 // Node-level materialization helper.
 export { materialize } from "./materialize";
 
+// Tombstone compaction helpers.
+export { compactDocTombstones, compactStateTombstones } from "./compact";
+
 // Low-level document merge helpers.
 export { mergeDoc, tryMergeDoc } from "./merge";
 
@@ -48,6 +51,8 @@ export type {
   ApplyPatchAsActorOptions,
   ApplyResult,
   Clock,
+  CompactDocTombstonesResult,
+  CompactStateTombstonesResult,
   CompilePatchOptions,
   Doc,
   Dot,
@@ -65,6 +70,8 @@ export type {
   SerializedDoc,
   SerializedNode,
   SerializedRgaElem,
+  TombstoneCompactionOptions,
+  TombstoneCompactionStats,
   TryMergeDocResult,
   VersionVector,
 } from "./types";
@@ -76,13 +83,14 @@ export { ROOT_KEY } from "./types";
 export { compareDot, vvHasDot, vvMerge, dotToElemId } from "./dot";
 
 // Low-level node constructors and operations.
-export { newObj, newSeq, newReg, lwwSet, objSet, objRemove } from "./nodes";
+export { newObj, newSeq, newReg, lwwSet, objSet, objRemove, objCompactTombstones } from "./nodes";
 
 // Low-level RGA operations.
 export {
   HEAD,
   rgaInsertAfter,
   rgaDelete,
+  rgaCompactTombstones,
   rgaLinearizeIds,
   rgaPrevForInsertAtIndex,
   rgaIdAtIndex,

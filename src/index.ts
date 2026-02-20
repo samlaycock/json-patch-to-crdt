@@ -7,6 +7,7 @@ export type {
   ApplyPatchInPlaceOptions,
   ApplyPatchOptions,
   CrdtState,
+  CompactStateTombstonesResult,
   DiffOptions,
   DeserializeErrorReason,
   ForkStateOptions,
@@ -18,6 +19,8 @@ export type {
   PatchErrorReason,
   PatchSemantics,
   SerializedState,
+  TombstoneCompactionOptions,
+  TombstoneCompactionStats,
   TryApplyPatchInPlaceResult,
   TryApplyPatchResult,
   TryMergeStateResult,
@@ -45,6 +48,9 @@ export { DeserializeError, serializeState, deserializeState } from "./serialize"
 
 // Merge
 export { MergeError, mergeState, tryMergeState } from "./merge";
+
+// Tombstone compaction
+export { compactStateTombstones } from "./compact";
 
 // Traversal limits
 export { MAX_TRAVERSAL_DEPTH, TraversalDepthError } from "./depth";

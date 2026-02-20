@@ -100,6 +100,92 @@ export function rgaDelete(seq: RgaSeq, id: ElemId): void {
   bumpVersion(seq);
 }
 
+/**
+ * Prune tombstoned elements that are causally stable and have no live descendants
+ * depending on them for sequence traversal.
+ *
+ * Returns the number of removed elements.
+ */
+export function rgaCompactTombstones(seq: RgaSeq, isStable: (dot: Dot) => boolean): number {
+  if (seq.elems.size === 0) {
+    return 0;
+  }
+
+  const children = new Map<ElemId, ElemId[]>();
+  const roots: ElemId[] = [];
+
+  for (const elem of seq.elems.values()) {
+    const byPrev = children.get(elem.prev);
+    if (byPrev) {
+      byPrev.push(elem.id);
+    } else {
+      children.set(elem.prev, [elem.id]);
+    }
+
+    if (elem.prev === HEAD || !seq.elems.has(elem.prev)) {
+      roots.push(elem.id);
+    }
+  }
+
+  const removable = new Set<ElemId>();
+  const visited = new Set<ElemId>();
+  const stack: Array<{ id: ElemId; expanded: boolean }> = [];
+  const pushRoot = (id: ElemId) => {
+    if (!visited.has(id)) {
+      stack.push({ id, expanded: false });
+    }
+  };
+
+  for (const id of roots) {
+    pushRoot(id);
+  }
+  for (const id of seq.elems.keys()) {
+    pushRoot(id);
+  }
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (!frame.expanded) {
+      if (visited.has(frame.id)) {
+        continue;
+      }
+
+      visited.add(frame.id);
+      stack.push({ id: frame.id, expanded: true });
+      const childIds = children.get(frame.id);
+      if (childIds) {
+        for (const childId of childIds) {
+          if (!visited.has(childId)) {
+            stack.push({ id: childId, expanded: false });
+          }
+        }
+      }
+      continue;
+    }
+
+    const elem = seq.elems.get(frame.id);
+    if (!elem || !elem.tombstone || !isStable(elem.insDot)) {
+      continue;
+    }
+
+    const childIds = children.get(frame.id);
+    const allChildrenRemovable = !childIds || childIds.every((childId) => removable.has(childId));
+    if (allChildrenRemovable) {
+      removable.add(frame.id);
+    }
+  }
+
+  if (removable.size === 0) {
+    return 0;
+  }
+
+  for (const id of removable) {
+    seq.elems.delete(id);
+  }
+  bumpVersion(seq);
+  return removable.size;
+}
+
 export function rgaIdAtIndex(seq: RgaSeq, index: number): ElemId | undefined {
   const ids = rgaLinearizeIds(seq);
   return ids[index];

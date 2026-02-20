@@ -266,6 +266,38 @@ export type TryMergeDocResult = { ok: true; doc: Doc } | { ok: false; error: App
 /** Non-throwing result for `mergeState`. */
 export type TryMergeStateResult = { ok: true; state: CrdtState } | { ok: false; error: ApplyError };
 
+/** Options for tombstone compaction helpers. */
+export type TombstoneCompactionOptions = {
+  /**
+   * Causally stable checkpoint. Only tombstones at or below this checkpoint
+   * are candidates for pruning.
+   */
+  stable: VersionVector;
+  /**
+   * Mutate the input value in place.
+   * Defaults to `false` (immutable output).
+   */
+  mutate?: boolean;
+};
+
+/** Counts emitted by tombstone compaction helpers. */
+export type TombstoneCompactionStats = {
+  objectTombstonesRemoved: number;
+  sequenceTombstonesRemoved: number;
+};
+
+/** Result for `compactDocTombstones`. */
+export type CompactDocTombstonesResult = {
+  doc: Doc;
+  stats: TombstoneCompactionStats;
+};
+
+/** Result for `compactStateTombstones`. */
+export type CompactStateTombstonesResult = {
+  state: CrdtState;
+  stats: TombstoneCompactionStats;
+};
+
 /** Options-object overload shape for low-level JSON Patch -> CRDT conversion. */
 export type JsonPatchToCrdtOptions = {
   base: Doc;
