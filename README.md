@@ -32,6 +32,24 @@ npm install json-patch-to-crdt
 - TypeScript `^5` when type-checking in your project.
 - Bun `1.3.7` is used for this repo's own build/test scripts.
 
+## Testing (Repo)
+
+Run all tests:
+
+```bash
+bun run test
+```
+
+Run targeted domain suites:
+
+```bash
+bun run test:state-core
+bun run test:patch-diff-doc
+bun run test:merge-compaction
+bun run test:replica-session
+bun run test:perf-regression
+```
+
 ## Quick Start (Recommended API)
 
 ```ts

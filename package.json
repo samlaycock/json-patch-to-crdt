@@ -43,6 +43,11 @@
     "typecheck": "tsc --noEmit",
     "build": "tsdown --config tsdown.config.mts",
     "bench:sequential": "bun run bench/sequential-apply.microbench.ts",
+    "test:state-core": "bun test tests/state-core.test.ts",
+    "test:patch-diff-doc": "bun test tests/patch-diff-doc.test.ts",
+    "test:merge-compaction": "bun test tests/merge-compaction.test.ts",
+    "test:replica-session": "bun test tests/replica-session.test.ts",
+    "test:perf-regression": "bun test tests/perf-regression.test.ts",
     "ci:publish": "bun run build && changeset publish"
   },
   "devDependencies": {
