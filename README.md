@@ -220,6 +220,7 @@ const fullPatch = crdtToFullReplace(doc);
 ### Array Delta Strategy
 
 By default, arrays are diffed with deterministic LCS edits.
+To prevent pathological `O(n*m)` matrix growth on very large arrays, LCS falls back to atomic array replacement when matrix cells exceed `250_000` by default.
 
 If you want atomic array replacement, pass `{ arrayStrategy: "atomic" }`:
 
@@ -227,10 +228,22 @@ If you want atomic array replacement, pass `{ arrayStrategy: "atomic" }`:
 const delta = diffJsonPatch(baseJson, nextJson, { arrayStrategy: "atomic" });
 ```
 
+If you want to tune the LCS fallback threshold, pass `lcsMaxCells`:
+
+```ts
+const delta = diffJsonPatch(baseJson, nextJson, {
+  arrayStrategy: "lcs",
+  lcsMaxCells: 500_000,
+});
+```
+
 Notes:
 
 - LCS diffs are deterministic but not necessarily minimal.
 - Reorders are expressed as remove/add pairs.
+- LCS complexity is `O(n*m)` in time and memory.
+- `lcsMaxCells` sets the matrix cap: `(base.length + 1) * (next.length + 1)`.
+- Set `lcsMaxCells: Number.POSITIVE_INFINITY` to always allow LCS.
 
 ## Merging
 
@@ -388,6 +401,9 @@ Use `crdtToFullReplace(doc)` from `json-patch-to-crdt/internals`, which emits a 
 
 **Why do array deltas look bigger than expected?**
 LCS diffs are deterministic, not minimal. If you prefer one-op array replacement, use `{ arrayStrategy: "atomic" }`.
+
+**Why did my array delta become a full `replace` even with LCS?**
+For scalability, LCS falls back to atomic replacement when arrays exceed the `lcsMaxCells` guardrail (default `250_000` matrix cells). Increase `lcsMaxCells` to allow larger LCS runs.
 
 **Does LCS guarantee the smallest patch?**
 No. It is deterministic and usually compact, but not guaranteed to be minimal.

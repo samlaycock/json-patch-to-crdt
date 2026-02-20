@@ -9,6 +9,8 @@ import type {
 
 import { ROOT_KEY } from "./types";
 
+const DEFAULT_LCS_MAX_CELLS = 250_000;
+
 /** Structured compile error used to map patch validation failures to typed reasons. */
 export class PatchCompileError extends Error {
   readonly reason: PatchErrorReason;
@@ -206,7 +208,12 @@ function diffValue(
     const arrayStrategy = options.arrayStrategy ?? "lcs";
 
     if (arrayStrategy === "lcs" && Array.isArray(base) && Array.isArray(next)) {
-      diffArray(path, base, next, ops, options);
+      if (!shouldUseLcsDiff(base.length, next.length, options.lcsMaxCells)) {
+        ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
+        return;
+      }
+
+      diffArray(path, base, next, ops);
       return;
     }
 
@@ -248,13 +255,7 @@ function diffValue(
   }
 }
 
-function diffArray(
-  path: string[],
-  base: JsonValue[],
-  next: JsonValue[],
-  ops: JsonPatchOp[],
-  _options: DiffOptions,
-): void {
+function diffArray(path: string[], base: JsonValue[], next: JsonValue[], ops: JsonPatchOp[]): void {
   const n = base.length;
   const m = next.length;
   const lcs: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
@@ -307,6 +308,20 @@ function diffArray(
   }
 
   ops.push(...compactArrayOps(localOps));
+}
+
+function shouldUseLcsDiff(baseLength: number, nextLength: number, lcsMaxCells?: number): boolean {
+  if (lcsMaxCells === Number.POSITIVE_INFINITY) {
+    return true;
+  }
+
+  const cap = lcsMaxCells ?? DEFAULT_LCS_MAX_CELLS;
+  if (!Number.isFinite(cap) || cap < 1) {
+    return false;
+  }
+
+  const matrixCells = (baseLength + 1) * (nextLength + 1);
+  return matrixCells <= cap;
 }
 
 function compactArrayOps(ops: JsonPatchOp[]): JsonPatchOp[] {

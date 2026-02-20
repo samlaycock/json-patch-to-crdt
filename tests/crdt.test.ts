@@ -1685,6 +1685,45 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "/arr/1", value: 3 }]);
   });
 
+  it("falls back to atomic array replacement for large arrays by default", () => {
+    const baseArr = Array.from({ length: 600 }, (_, idx) => idx);
+    const nextArr = [...baseArr];
+    nextArr[300] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next);
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr", value: nextArr }]);
+  });
+
+  it("allows overriding the LCS guardrail for larger arrays", () => {
+    const baseArr = Array.from({ length: 600 }, (_, idx) => idx);
+    const nextArr = [...baseArr];
+    nextArr[300] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      lcsMaxCells: 500_000,
+    });
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr/300", value: -1 }]);
+  });
+
+  it("supports forcing atomic fallback with a low LCS guardrail", () => {
+    const base: JsonValue = { arr: [1, 2, 3] };
+    const next: JsonValue = { arr: [1, 4, 3] };
+
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      lcsMaxCells: 1,
+    });
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr", value: [1, 4, 3] }]);
+  });
+
   it("produces nested array paths with LCS", () => {
     const base: JsonValue = { obj: { arr: [1, 2] } };
     const next: JsonValue = { obj: { arr: [1, 3] } };
