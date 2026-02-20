@@ -1,0 +1,66 @@
+import { describe, expect, it } from "bun:test";
+
+import type { JsonPatchOp, JsonValue } from "../src";
+
+import { applyPatch, compactStateTombstones, createState, diffJsonPatch, toJson } from "../src";
+
+describe("performance regressions", () => {
+  it("falls back to atomic replace for very large LCS matrices", () => {
+    const baseArr = Array.from({ length: 1_500 }, (_, idx) => idx);
+    const nextArr = [...baseArr];
+    nextArr[750] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const patch = diffJsonPatch(base, next);
+
+    expect(patch).toEqual([{ op: "replace", path: "/arr", value: nextArr }]);
+  });
+
+  it("keeps sequential long-patch semantics stable on large arrays", () => {
+    const base = createState(
+      {
+        list: Array.from({ length: 500 }, (_, idx) => idx),
+      },
+      { actor: "perf" },
+    );
+    const patch: JsonPatchOp[] = [];
+    for (let i = 0; i < 400; i++) {
+      patch.push({
+        op: "replace",
+        path: `/list/${i}`,
+        value: i + 1_000,
+      });
+    }
+
+    const next = applyPatch(base, patch, { semantics: "sequential" });
+    const json = toJson(next) as { list: number[] };
+
+    expect(json.list[0]).toBe(1_000);
+    expect(json.list[399]).toBe(1_399);
+    expect(json.list[499]).toBe(499);
+  });
+
+  it("compacts high-volume stable tombstones without changing materialized output", () => {
+    const initial: Record<string, JsonValue> = {};
+    for (let i = 0; i < 400; i++) {
+      initial[`k${i}`] = i;
+    }
+
+    const base = createState({ obj: initial }, { actor: "gc" });
+    const removals: JsonPatchOp[] = [];
+    for (let i = 0; i < 300; i++) {
+      removals.push({ op: "remove", path: `/obj/k${i}` });
+    }
+
+    const removed = applyPatch(base, removals, { semantics: "sequential" });
+    const before = toJson(removed);
+
+    const compacted = compactStateTombstones(removed, {
+      stable: { gc: removed.clock.ctr },
+    });
+
+    expect(compacted.stats.objectTombstonesRemoved).toBeGreaterThanOrEqual(300);
+    expect(toJson(compacted.state)).toEqual(before);
+  });
+});
