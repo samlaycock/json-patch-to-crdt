@@ -278,7 +278,21 @@ export type JsonPatchToCrdtOptions = {
 };
 
 /** Options for `crdtToJsonPatch` and `diffJsonPatch`. */
-export type DiffOptions = { arrayStrategy?: "atomic" | "lcs" };
+export type DiffOptions = {
+  /**
+   * Array diff mode.
+   * - `"lcs"` (default): index-level edits using LCS.
+   * - `"atomic"`: one-op root/field replacement for changed arrays.
+   */
+  arrayStrategy?: "atomic" | "lcs";
+  /**
+   * Maximum LCS matrix cells (`(base.length + 1) * (next.length + 1)`) before
+   * falling back to atomic replacement. Defaults to `250_000`.
+   *
+   * Set to `Number.POSITIVE_INFINITY` to always allow LCS.
+   */
+  lcsMaxCells?: number;
+};
 
 /**
  * Internal sentinel key used in `IntentOp` to represent root-level operations.
