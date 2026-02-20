@@ -264,6 +264,39 @@ Resolution rules:
 `mergeDoc` is commutative (`merge(a, b)` equals `merge(b, a)`) and idempotent.
 For `mergeState`, pass the local actor explicitly (or as the first argument) so each peer keeps a stable actor ID.
 
+## Tombstone Compaction
+
+Long-lived documents can accumulate object/array tombstones.  
+You can compact causally-stable tombstones with:
+
+```ts
+import { compactStateTombstones } from "json-patch-to-crdt";
+
+const { state: compacted, stats } = compactStateTombstones(state, {
+  stable: { A: 120, B: 98, C: 77 },
+});
+
+console.log(stats);
+// { objectTombstonesRemoved: number, sequenceTombstonesRemoved: number }
+```
+
+For server-side workflows operating on raw docs, use internals:
+
+```ts
+import { compactDocTombstones } from "json-patch-to-crdt/internals";
+
+compactDocTombstones(doc, {
+  stable: checkpointVv,
+  mutate: true, // optional in-place compaction
+});
+```
+
+Safety conditions:
+
+- Only compact at checkpoints that are causally stable across all peers you still merge with.
+- Do not merge compacted replicas with peers that may be behind that checkpoint.
+- Compaction preserves materialized JSON output for the compacted document/state.
+
 ## Serialization
 
 ```ts
@@ -400,6 +433,9 @@ By default, `forkState` blocks reusing `origin.clock.actor` because same-actor f
 
 **Why can my local counter jump after a merge?**
 Array inserts that target an existing predecessor may need to outrank sibling insert dots for deterministic ordering. The library can fast-forward the local counter in constant time to avoid expensive loops, but the resulting counter value may still jump upward when merging with peers that already have high counters.
+
+**How should I run tombstone compaction in production?**
+Treat compaction as a maintenance step after a causal-stability checkpoint (for example, after all replicas acknowledge processing through a specific version vector), then compact and persist the compacted snapshot.
 
 ## Limitations
 

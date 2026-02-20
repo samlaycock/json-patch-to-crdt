@@ -45,3 +45,22 @@ export function objRemove(obj: ObjNode, key: string, dot: Dot): void {
   // You can keep entry for history or drop it; dropping is fine with remove-wins.
   obj.entries.delete(key);
 }
+
+/**
+ * Prune object tombstones that satisfy a caller-provided stability predicate.
+ * Returns the number of removed tombstone records.
+ */
+export function objCompactTombstones(obj: ObjNode, isStable: (dot: Dot) => boolean): number {
+  let removed = 0;
+
+  for (const [key, dot] of obj.tombstone.entries()) {
+    if (!isStable(dot)) {
+      continue;
+    }
+
+    obj.tombstone.delete(key);
+    removed += 1;
+  }
+
+  return removed;
+}

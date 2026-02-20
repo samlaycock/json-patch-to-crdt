@@ -5,6 +5,8 @@ import {
   applyPatch,
   applyPatchAsActor,
   applyPatchInPlace,
+  compactDocTombstones,
+  compactStateTombstones,
   tryApplyPatch,
   tryApplyPatchInPlace,
   validateJsonPatch,
@@ -2936,6 +2938,88 @@ describe("mergeState", () => {
     expect(result.items).toContain("fromB1");
     expect(result.items).toContain("fromA2");
     expect(result.items).toContain("fromB2");
+  });
+});
+
+describe("tombstone compaction", () => {
+  it("compacts causally-stable object tombstones without changing materialized output", () => {
+    const state = createState({ obj: { x: 1 } }, { actor: "A" });
+    const removed = applyPatch(state, [{ op: "remove", path: "/obj/x" }]);
+    const beforeJson = toJson(removed);
+
+    const beforeObjNode = (removed.doc.root as any).entries.get("obj")?.node as any;
+    expect(beforeObjNode.tombstone.has("x")).toBeTrue();
+
+    const compacted = compactStateTombstones(removed, {
+      stable: { A: removed.clock.ctr },
+    });
+    const afterObjNode = (compacted.state.doc.root as any).entries.get("obj")?.node as any;
+
+    expect(compacted.stats.objectTombstonesRemoved).toBe(1);
+    expect(toJson(compacted.state)).toEqual(beforeJson);
+    expect(afterObjNode.tombstone.has("x")).toBeFalse();
+    // Immutable by default: original state remains unchanged.
+    expect(beforeObjNode.tombstone.has("x")).toBeTrue();
+  });
+
+  it("keeps object tombstones when they are not causally stable", () => {
+    const state = createState({ obj: { x: 1 } }, { actor: "A" });
+    const removed = applyPatch(state, [{ op: "remove", path: "/obj/x" }]);
+
+    const compacted = compactStateTombstones(removed, {
+      stable: { A: Math.max(0, removed.clock.ctr - 1) },
+    });
+    const afterObjNode = (compacted.state.doc.root as any).entries.get("obj")?.node as any;
+
+    expect(compacted.stats.objectTombstonesRemoved).toBe(0);
+    expect(afterObjNode.tombstone.has("x")).toBeTrue();
+  });
+
+  it("compacts stable tombstoned sequence elements when no live descendants depend on them", () => {
+    const state = createState(["a", "b", "c"], { actor: "A" });
+    const removed = applyPatch(state, [{ op: "remove", path: "/2" }], {
+      semantics: "sequential",
+    });
+    const beforeJson = toJson(removed);
+
+    const compacted = compactStateTombstones(removed, {
+      stable: { A: removed.clock.ctr },
+    });
+
+    expect(compacted.stats.sequenceTombstonesRemoved).toBeGreaterThanOrEqual(1);
+    expect(toJson(compacted.state)).toEqual(beforeJson);
+  });
+
+  it("keeps tombstoned sequence anchors that still have live descendants", () => {
+    const state = createState(["a"], { actor: "A" });
+    const withChild = applyPatch(state, [{ op: "add", path: "/1", value: "b" }], {
+      semantics: "sequential",
+    });
+    const deletedAnchor = applyPatch(withChild, [{ op: "remove", path: "/0" }], {
+      semantics: "sequential",
+    });
+
+    const compacted = compactStateTombstones(deletedAnchor, {
+      stable: { A: deletedAnchor.clock.ctr },
+    });
+
+    expect(toJson(compacted.state)).toEqual(["b"]);
+    expect(compacted.stats.sequenceTombstonesRemoved).toBe(0);
+  });
+
+  it("supports in-place document compaction for server workflows", () => {
+    const state = createState({ obj: { x: 1 } }, { actor: "A" });
+    const removed = applyPatch(state, [{ op: "remove", path: "/obj/x" }]);
+
+    const compacted = compactDocTombstones(removed.doc, {
+      stable: { A: removed.clock.ctr },
+      mutate: true,
+    });
+
+    const objNode = (removed.doc.root as any).entries.get("obj")?.node as any;
+    expect(compacted.stats.objectTombstonesRemoved).toBe(1);
+    expect(objNode.tombstone.has("x")).toBeFalse();
+    expect(materialize(removed.doc.root)).toEqual({ obj: {} });
   });
 });
 
