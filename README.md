@@ -30,7 +30,7 @@ npm install json-patch-to-crdt
 
 - Node.js `>= 18` (for package consumers).
 - TypeScript `^5` when type-checking in your project.
-- Bun is optional (used for this repo's own build/test scripts).
+- Bun `1.3.7` is used for this repo's own build/test scripts.
 
 ## Quick Start (Recommended API)
 
