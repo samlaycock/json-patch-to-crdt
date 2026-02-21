@@ -1,0 +1,3 @@
+# Keep release artifacts unmanaged by oxfmt
+CHANGELOG.md
+.changeset/**
