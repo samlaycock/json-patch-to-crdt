@@ -806,6 +806,8 @@ function applyArrReplace(
  * @param newDot - A function that generates a unique `Dot` per mutation.
  * @param evalTestAgainst - Whether `test` ops are evaluated against `"head"` or `"base"`.
  * @param bumpCounterAbove - Optional hook that can fast-forward the underlying counter before inserts.
+ * @param options - Optional behavior toggles.
+ * @param options.strictParents - When `true`, reject array inserts whose base parent path is missing.
  * @returns `{ ok: true }` on success, or `{ ok: false, code: 409, message }` on conflict.
  */
 export function applyIntentsToCrdt(
