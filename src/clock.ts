@@ -1,5 +1,23 @@
 import type { ActorId, Clock, Dot, VersionVector } from "./types";
 
+function readVvCounter(vv: VersionVector, actor: ActorId): number {
+  if (!Object.prototype.hasOwnProperty.call(vv, actor)) {
+    return 0;
+  }
+
+  const counter = vv[actor];
+  return typeof counter === "number" ? counter : 0;
+}
+
+function writeVvCounter(vv: VersionVector, actor: ActorId, counter: number): void {
+  Object.defineProperty(vv, actor, {
+    configurable: true,
+    enumerable: true,
+    value: counter,
+    writable: true,
+  });
+}
+
 /**
  * Create a new clock for the given actor. Each call to `clock.next()` yields a fresh `Dot`.
  * @param actor - Unique identifier for this peer.
@@ -29,14 +47,14 @@ export function cloneClock(clock: Clock): Clock {
  * Useful when a server needs to mint dots for many actors.
  */
 export function nextDotForActor(vv: VersionVector, actor: ActorId): Dot {
-  const ctr = (vv[actor] ?? 0) + 1;
-  vv[actor] = ctr;
+  const ctr = readVvCounter(vv, actor) + 1;
+  writeVvCounter(vv, actor, ctr);
   return { actor, ctr };
 }
 
 /** Record an observed dot in a version vector. */
 export function observeDot(vv: VersionVector, dot: Dot): void {
-  if ((vv[dot.actor] ?? 0) < dot.ctr) {
-    vv[dot.actor] = dot.ctr;
+  if (readVvCounter(vv, dot.actor) < dot.ctr) {
+    writeVvCounter(vv, dot.actor, dot.ctr);
   }
 }

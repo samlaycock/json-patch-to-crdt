@@ -121,6 +121,18 @@ describe("dots and version vectors", () => {
     expect(vvHasDot(vv, dot("A", 4))).toBeFalse();
     expect(vvHasDot(vv, dot("B", 1))).toBeFalse();
   });
+
+  it("merges unsafe actor keys without prototype mutation", () => {
+    const left: VersionVector = { A: 1 };
+    const right = JSON.parse('{"__proto__":2,"B":3}') as VersionVector;
+    const out = vvMerge(left, right) as Record<string, number>;
+
+    expect(out.A).toBe(1);
+    expect(out.B).toBe(3);
+    expect(Object.prototype.hasOwnProperty.call(out, "__proto__")).toBeTrue();
+    expect(out.__proto__).toBe(2);
+    expect(Object.getPrototypeOf(out)).toBeNull();
+  });
 });
 
 describe("clock and state", () => {
@@ -147,6 +159,17 @@ describe("clock and state", () => {
     expect(nextDotForActor(vv, "B")).toEqual({ actor: "B", ctr: 1 });
     observeDot(vv, { actor: "A", ctr: 5 });
     expect(nextDotForActor(vv, "A")).toEqual({ actor: "A", ctr: 6 });
+  });
+
+  it("handles unsafe actor ids without mutating version vector prototypes", () => {
+    const vv: VersionVector = {};
+
+    expect(nextDotForActor(vv, "__proto__")).toEqual({ actor: "__proto__", ctr: 1 });
+    observeDot(vv, { actor: "__proto__", ctr: 3 });
+
+    expect(Object.prototype.hasOwnProperty.call(vv, "__proto__")).toBeTrue();
+    expect((vv as Record<string, number>).__proto__).toBe(3);
+    expect(Object.getPrototypeOf(vv)).toBe(Object.prototype);
   });
 
   it("creates state and materializes JSON", () => {
@@ -810,6 +833,24 @@ describe("serialization", () => {
 
     expect(materialize(restored.root)).toEqual(materialize(doc.root));
     expect(() => JSON.stringify(payload)).not.toThrow();
+  });
+
+  it("serializes unsafe object keys without mutating serialized prototypes", () => {
+    const value = JSON.parse(
+      '{"__proto__":{"x":1},"constructor":{"prototype":{"polluted":true}}}',
+    ) as JsonValue;
+    const doc = docFromJsonWithDot(value, dot("A", 1));
+    const payload = serializeDoc(doc);
+
+    if (payload.root.kind !== "obj") {
+      throw new Error("Expected serialized root object");
+    }
+
+    const entries = payload.root.entries as Record<string, JsonValue>;
+    expect(Object.prototype.hasOwnProperty.call(entries, "__proto__")).toBeTrue();
+    expect((entries.__proto__ as Record<string, JsonValue>).dot).toBeDefined();
+    expect(Object.getPrototypeOf(entries)).toBeNull();
+    expect((Object.prototype as Record<string, JsonValue>).polluted).toBeUndefined();
   });
 
   it("preserves tombstones and RGA deletions", () => {

@@ -18,6 +18,19 @@ import { dotToElemId } from "./dot";
 
 const HEAD_ELEM_ID = "HEAD";
 
+function createSerializedRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+function setSerializedRecordValue<T>(out: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(out, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
 export class DeserializeError extends Error {
   readonly code = 409 as const;
   readonly reason: DeserializeErrorReason;
@@ -89,31 +102,31 @@ function serializeNode(node: Doc["root"]): SerializedNode {
   }
 
   if (node.kind === "obj") {
-    const entries: Record<string, { node: SerializedNode; dot: Dot }> = {};
+    const entries = createSerializedRecord<{ node: SerializedNode; dot: Dot }>();
     for (const [k, v] of node.entries.entries()) {
-      entries[k] = {
+      setSerializedRecordValue(entries, k, {
         node: serializeNode(v.node),
         dot: { actor: v.dot.actor, ctr: v.dot.ctr },
-      };
+      });
     }
 
-    const tombstone: Record<string, Dot> = {};
+    const tombstone = createSerializedRecord<Dot>();
     for (const [k, d] of node.tombstone.entries()) {
-      tombstone[k] = { actor: d.actor, ctr: d.ctr };
+      setSerializedRecordValue(tombstone, k, { actor: d.actor, ctr: d.ctr });
     }
 
     return { kind: "obj", entries, tombstone };
   }
 
-  const elems: Record<string, SerializedRgaElem> = {};
+  const elems = createSerializedRecord<SerializedRgaElem>();
   for (const [id, e] of node.elems.entries()) {
-    elems[id] = {
+    setSerializedRecordValue(elems, id, {
       id: e.id,
       prev: e.prev,
       tombstone: e.tombstone,
       value: serializeNode(e.value),
       insDot: { actor: e.insDot.actor, ctr: e.insDot.ctr },
-    };
+    });
   }
 
   return { kind: "seq", elems };
