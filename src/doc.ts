@@ -715,6 +715,17 @@ function applyArrDelete(
     };
   }
 
+  const e = headSeq.elems.get(baseId);
+  if (!e) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_TARGET",
+      message: `element missing in head lineage at index ${it.index}`,
+      path: `/${it.path.join("/")}/${it.index}`,
+    };
+  }
+
   rgaDelete(headSeq, baseId);
 
   return null;
