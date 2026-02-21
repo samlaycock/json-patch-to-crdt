@@ -572,11 +572,22 @@ function applyArrInsert(
   it: Extract<IntentOp, { t: "ArrInsert" }>,
   newDot: () => Dot,
   bumpCounterAbove?: (ctr: number) => void,
+  strictParents = false,
 ): ApplyResult | null {
   const pointer = `/${it.path.join("/")}`;
   const baseSeq = getSeqAtPath(base, it.path);
 
   if (!baseSeq) {
+    if (strictParents) {
+      return {
+        ok: false,
+        code: 409,
+        reason: "MISSING_PARENT",
+        message: `base array missing at /${it.path.join("/")}`,
+        path: pointer,
+      };
+    }
+
     if (it.index === 0 || it.index === Number.POSITIVE_INFINITY) {
       const headSeq = ensureSeqAtPath(head, it.path, newDot());
       const prev =
@@ -804,6 +815,7 @@ export function applyIntentsToCrdt(
   newDot: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
+  options: { strictParents?: boolean } = {},
 ): ApplyResult {
   for (const it of intents) {
     let fail: ApplyResult | null = null;
@@ -819,7 +831,14 @@ export function applyIntentsToCrdt(
         fail = applyObjRemove(head, it, newDot);
         break;
       case "ArrInsert":
-        fail = applyArrInsert(base, head, it, newDot, bumpCounterAbove);
+        fail = applyArrInsert(
+          base,
+          head,
+          it,
+          newDot,
+          bumpCounterAbove,
+          options.strictParents ?? false,
+        );
         break;
       case "ArrDelete":
         fail = applyArrDelete(base, head, it, newDot);
@@ -840,8 +859,10 @@ export function applyIntentsToCrdt(
 /**
  * Convenience wrapper: compile a JSON Patch and apply it to a CRDT document.
  * Overloads:
- * - positional: `jsonPatchToCrdt(base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?)`
- * - object: `jsonPatchToCrdt({ base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?, semantics? })`
+ * - positional:
+ *   `jsonPatchToCrdt(base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?, strictParents?)`
+ * - object:
+ *   `jsonPatchToCrdt({ base, head, patch, newDot, evalTestAgainst?, bumpCounterAbove?, semantics?, strictParents? })`
  */
 export function jsonPatchToCrdt(options: JsonPatchToCrdtOptions): ApplyResult;
 export function jsonPatchToCrdt(
@@ -851,6 +872,7 @@ export function jsonPatchToCrdt(
   newDot: () => Dot,
   evalTestAgainst?: "head" | "base",
   bumpCounterAbove?: (ctr: number) => void,
+  strictParents?: boolean,
 ): ApplyResult;
 export function jsonPatchToCrdt(
   baseOrOptions: Doc | JsonPatchToCrdtOptions,
@@ -859,6 +881,7 @@ export function jsonPatchToCrdt(
   newDot?: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
+  strictParents = false,
 ): ApplyResult {
   if (isJsonPatchToCrdtOptions(baseOrOptions)) {
     return jsonPatchToCrdtInternal(baseOrOptions);
@@ -880,6 +903,7 @@ export function jsonPatchToCrdt(
     newDot,
     evalTestAgainst,
     bumpCounterAbove,
+    strictParents,
   });
 }
 
@@ -895,6 +919,7 @@ export function jsonPatchToCrdtSafe(
   newDot: () => Dot,
   evalTestAgainst?: "head" | "base",
   bumpCounterAbove?: (ctr: number) => void,
+  strictParents?: boolean,
 ): ApplyResult;
 export function jsonPatchToCrdtSafe(
   baseOrOptions: Doc | JsonPatchToCrdtOptions,
@@ -903,6 +928,7 @@ export function jsonPatchToCrdtSafe(
   newDot?: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
+  strictParents = false,
 ): ApplyResult {
   try {
     if (isJsonPatchToCrdtOptions(baseOrOptions)) {
@@ -918,7 +944,15 @@ export function jsonPatchToCrdtSafe(
       };
     }
 
-    return jsonPatchToCrdt(baseOrOptions, head, patch, newDot, evalTestAgainst, bumpCounterAbove);
+    return jsonPatchToCrdt(
+      baseOrOptions,
+      head,
+      patch,
+      newDot,
+      evalTestAgainst,
+      bumpCounterAbove,
+      strictParents,
+    );
   } catch (error) {
     return toApplyError(error);
   }
@@ -968,6 +1002,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
       options.newDot,
       evalTestAgainst,
       options.bumpCounterAbove,
+      { strictParents: options.strictParents },
     );
   }
 
@@ -1000,6 +1035,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
       options.newDot,
       evalTestAgainst,
       options.bumpCounterAbove,
+      { strictParents: options.strictParents },
     );
     if (!headStep.ok) {
       return withOpIndex(headStep, opIndex);
@@ -1015,6 +1051,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
         shadowDot,
         "base",
         shadowBump,
+        { strictParents: options.strictParents },
       );
       if (!shadowStep.ok) {
         return withOpIndex(shadowStep, opIndex);

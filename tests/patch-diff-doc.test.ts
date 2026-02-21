@@ -650,6 +650,27 @@ describe("applyIntentsToCrdt", () => {
     expect(materialize(headDoc2.root)).toEqual({ list: ["b"] });
   });
 
+  it("rejects missing base arrays for inserts in strictParents mode", () => {
+    const baseDoc = docFromJsonWithDot({}, dot("A", 0));
+    const headDoc = docFromJsonWithDot({ list: [] }, dot("A", 0));
+
+    const res = applyIntentsToCrdt(
+      baseDoc,
+      headDoc,
+      [{ t: "ArrInsert", path: ["list"], index: 0, value: "a" }],
+      newDotGen("A", 1),
+      "head",
+      undefined,
+      { strictParents: true },
+    );
+
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.reason).toBe("MISSING_PARENT");
+    }
+    expect(materialize(headDoc.root)).toEqual({ list: [] });
+  });
+
   it("rejects array insert when base is missing and index is not 0 or append", () => {
     const baseDoc = docFromJsonWithDot({}, dot("A", 0));
     const headDoc = cloneDoc(baseDoc);
