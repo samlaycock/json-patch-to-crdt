@@ -1156,6 +1156,14 @@ describe("getAtJson", () => {
     expect(getAtJson(data, ["a", "b", "1"])).toBe(2);
   });
 
+  it("treats inherited object properties as missing keys", () => {
+    const data: JsonValue = {};
+
+    expect(() => getAtJson(data, ["toString"])).toThrow("Missing key 'toString'");
+    expect(() => getAtJson(data, ["hasOwnProperty"])).toThrow("Missing key 'hasOwnProperty'");
+    expect(() => getAtJson(data, ["__proto__"])).toThrow("Missing key '__proto__'");
+  });
+
   it("throws on missing object keys", () => {
     const data: JsonValue = { a: 1 };
     expect(() => getAtJson(data, ["b"])).toThrow();
