@@ -364,6 +364,19 @@ describe("clock and state", () => {
     }
   });
 
+  it("rejects base-aware array remove when mapped element is missing in head lineage", () => {
+    const base = createState({ a: ["x"] }, { actor: "A" });
+    const head = applyPatch(base, [{ op: "replace", path: "/a", value: [] }]);
+
+    const result = tryApplyPatch(head, [{ op: "remove", path: "/a/0" }], { base });
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("MISSING_TARGET");
+      expect(result.error.path).toBe("/a/0");
+    }
+  });
+
   it("supports sequential patch semantics against the evolving head", () => {
     const state = createState({ list: [1, 2] }, { actor: "A" });
     const next = applyPatch(state, [{ op: "add", path: "/list/0", value: 99 }], {

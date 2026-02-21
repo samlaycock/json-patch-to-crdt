@@ -2,4 +2,4 @@
 "json-patch-to-crdt": patch
 ---
 
-Prevent base-aware array intents from coercing a diverged head node into an array. Array insert/delete/replace now return a typed conflict when the head path is no longer an array, and a regression test covers this behavior.
+Prevent base-aware array intents from coercing diverged head nodes into arrays, and tighten base-aware `remove` so it fails when the mapped base element is missing from the current head lineage. Duplicate removals remain idempotent, while stale-lineage removals now return typed conflicts.
