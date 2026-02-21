@@ -20,6 +20,13 @@ type BenchmarkStats = {
   p50Ms: number;
 };
 
+type BenchmarkScenario = {
+  name: string;
+  baseSize: number;
+  patchLength: number;
+  runs: number;
+};
+
 function parsePositiveIntEnv(name: string, fallback: number): number {
   const raw = Bun.env[name];
   if (!raw) {
@@ -144,41 +151,73 @@ function format(n: number): string {
   return n.toFixed(2);
 }
 
+function resolveScenarios(): BenchmarkScenario[] {
+  const hasCustomScenario =
+    Bun.env.BENCH_BASE_SIZE !== undefined ||
+    Bun.env.BENCH_PATCH_LENGTH !== undefined ||
+    Bun.env.BENCH_RUNS !== undefined;
+  if (hasCustomScenario) {
+    return [
+      {
+        name: "custom",
+        baseSize: parsePositiveIntEnv("BENCH_BASE_SIZE", 2_000),
+        patchLength: parsePositiveIntEnv("BENCH_PATCH_LENGTH", 1_000),
+        runs: parsePositiveIntEnv("BENCH_RUNS", 12),
+      },
+    ];
+  }
+
+  return [
+    {
+      name: "medium",
+      baseSize: 2_000,
+      patchLength: 1_000,
+      runs: 12,
+    },
+    {
+      name: "large",
+      baseSize: 8_000,
+      patchLength: 4_000,
+      runs: 8,
+    },
+  ];
+}
+
 function main(): void {
-  const baseSize = parsePositiveIntEnv("BENCH_BASE_SIZE", 2_000);
-  const patchLength = parsePositiveIntEnv("BENCH_PATCH_LENGTH", 1_000);
-  const runs = parsePositiveIntEnv("BENCH_RUNS", 12);
-
-  const seed = createState(buildBaseDocument(baseSize), {
-    actor: "bench",
-  });
-  const patch = buildPatch(patchLength, baseSize);
-
-  assertEquivalentOutputs(seed, patch);
-
-  const legacy = measure("legacy-per-op-clone-materialize", runs, () => {
-    applyPatchLegacy(seed, patch);
-  });
-  const optimized = measure("optimized-applyPatch-sequential", runs, () => {
-    applyPatch(seed, patch, {
-      semantics: "sequential",
-    });
-  });
-
-  const speedup = legacy.avgMs / optimized.avgMs;
+  const scenarios = resolveScenarios();
 
   console.log("Sequential apply microbenchmark");
-  console.log(`base size: ${baseSize}`);
-  console.log(`patch length: ${patchLength}`);
-  console.log(`runs: ${runs}`);
-  console.log("");
-  console.log(
-    `${legacy.name}: avg=${format(legacy.avgMs)}ms p50=${format(legacy.p50Ms)}ms min=${format(legacy.minMs)}ms max=${format(legacy.maxMs)}ms`,
-  );
-  console.log(
-    `${optimized.name}: avg=${format(optimized.avgMs)}ms p50=${format(optimized.p50Ms)}ms min=${format(optimized.minMs)}ms max=${format(optimized.maxMs)}ms`,
-  );
-  console.log(`speedup (avg): ${format(speedup)}x`);
+  for (const scenario of scenarios) {
+    const seed = createState(buildBaseDocument(scenario.baseSize), {
+      actor: "bench",
+    });
+    const patch = buildPatch(scenario.patchLength, scenario.baseSize);
+
+    assertEquivalentOutputs(seed, patch);
+
+    const legacy = measure("legacy-per-op-clone-materialize", scenario.runs, () => {
+      applyPatchLegacy(seed, patch);
+    });
+    const optimized = measure("optimized-applyPatch-sequential", scenario.runs, () => {
+      applyPatch(seed, patch, {
+        semantics: "sequential",
+      });
+    });
+    const speedup = legacy.avgMs / optimized.avgMs;
+
+    console.log("");
+    console.log(
+      `[${scenario.name}] base size=${scenario.baseSize} patch length=${scenario.patchLength}`,
+    );
+    console.log(`runs: ${scenario.runs}`);
+    console.log(
+      `${legacy.name}: avg=${format(legacy.avgMs)}ms p50=${format(legacy.p50Ms)}ms min=${format(legacy.minMs)}ms max=${format(legacy.maxMs)}ms`,
+    );
+    console.log(
+      `${optimized.name}: avg=${format(optimized.avgMs)}ms p50=${format(optimized.p50Ms)}ms min=${format(optimized.minMs)}ms max=${format(optimized.maxMs)}ms`,
+    );
+    console.log(`speedup (avg): ${format(speedup)}x`);
+  }
 }
 
 main();

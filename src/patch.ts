@@ -160,15 +160,16 @@ export function compileJsonPatchToIntent(
 ): IntentOp[] {
   const semantics = options.semantics ?? "sequential";
   let workingBase: JsonValue = semantics === "sequential" ? structuredClone(baseJson) : baseJson;
+  const pointerCache = new Map<string, string[]>();
   const intents: IntentOp[] = [];
 
   for (let opIndex = 0; opIndex < patch.length; opIndex++) {
     const op = patch[opIndex]!;
     const compileBase = semantics === "sequential" ? workingBase : baseJson;
-    intents.push(...compileSingleOp(compileBase, op, opIndex, semantics));
+    intents.push(...compileSingleOp(compileBase, op, opIndex, semantics, pointerCache));
 
     if (semantics === "sequential") {
-      workingBase = applyPatchOpToJson(workingBase, op, opIndex);
+      workingBase = applyPatchOpToJsonInPlace(workingBase, op, opIndex, pointerCache);
     }
   }
 
@@ -430,20 +431,21 @@ function compileSingleOp(
   op: JsonPatchOp,
   opIndex: number,
   semantics: "sequential" | "base",
+  pointerCache: Map<string, string[]>,
 ): IntentOp[] {
   if (op.op === "test") {
     return [
       {
         t: "Test",
-        path: parsePointerOrThrow(op.path, op.path, opIndex),
+        path: parsePointerOrThrow(op.path, op.path, opIndex, pointerCache),
         value: op.value,
       },
     ];
   }
 
   if (op.op === "copy" || op.op === "move") {
-    const fromPath = parsePointerOrThrow(op.from, op.from, opIndex);
-    const toPath = parsePointerOrThrow(op.path, op.path, opIndex);
+    const fromPath = parsePointerOrThrow(op.from, op.from, opIndex, pointerCache);
+    const toPath = parsePointerOrThrow(op.path, op.path, opIndex, pointerCache);
 
     if (op.op === "move" && isStrictDescendantPath(fromPath, toPath)) {
       throw compileError(
@@ -454,7 +456,7 @@ function compileSingleOp(
       );
     }
 
-    const val = lookupValueOrThrow(baseJson, fromPath, op.from, opIndex);
+    const val = structuredClone(lookupValueOrThrow(baseJson, fromPath, op.from, opIndex));
 
     if (op.op === "move" && isSamePath(fromPath, toPath)) {
       return [];
@@ -463,11 +465,11 @@ function compileSingleOp(
     if (op.op === "move" && semantics === "sequential") {
       const removeOp: JsonPatchOp = { op: "remove", path: op.from };
       const addOp: JsonPatchOp = { op: "add", path: op.path, value: val };
-      const baseAfterRemove = applyPatchOpToJson(baseJson, removeOp, opIndex);
+      const baseAfterRemove = applyPatchOpToJson(baseJson, removeOp, opIndex, pointerCache);
 
       return [
-        ...compileSingleOp(baseJson, removeOp, opIndex, semantics),
-        ...compileSingleOp(baseAfterRemove, addOp, opIndex, semantics),
+        ...compileSingleOp(baseJson, removeOp, opIndex, semantics, pointerCache),
+        ...compileSingleOp(baseAfterRemove, addOp, opIndex, semantics, pointerCache),
       ];
     }
 
@@ -476,16 +478,25 @@ function compileSingleOp(
       { op: "add", path: op.path, value: val },
       opIndex,
       semantics,
+      pointerCache,
     );
 
     if (op.op === "move") {
-      out.push(...compileSingleOp(baseJson, { op: "remove", path: op.from }, opIndex, semantics));
+      out.push(
+        ...compileSingleOp(
+          baseJson,
+          { op: "remove", path: op.from },
+          opIndex,
+          semantics,
+          pointerCache,
+        ),
+      );
     }
 
     return out;
   }
 
-  const path = parsePointerOrThrow(op.path, op.path, opIndex);
+  const path = parsePointerOrThrow(op.path, op.path, opIndex, pointerCache);
 
   // Root replacement: treat as atomic set.
   if (path.length === 0) {
@@ -557,23 +568,42 @@ function compileSingleOp(
   return assertNever(op, "Unsupported op");
 }
 
-function applyPatchOpToJson(baseJson: JsonValue, op: JsonPatchOp, opIndex: number): JsonValue {
-  let doc = structuredClone(baseJson) as JsonValue;
+function applyPatchOpToJson(
+  baseJson: JsonValue,
+  op: JsonPatchOp,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): JsonValue {
+  const doc = structuredClone(baseJson) as JsonValue;
+  return applyPatchOpToJsonInPlace(doc, op, opIndex, pointerCache);
+}
 
+function applyPatchOpToJsonInPlace(
+  doc: JsonValue,
+  op: JsonPatchOp,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): JsonValue {
   if (op.op === "test") {
     return doc;
   }
 
   if (op.op === "copy" || op.op === "move") {
-    const fromPath = parsePointerOrThrow(op.from, op.from, opIndex);
+    const fromPath = parsePointerOrThrow(op.from, op.from, opIndex, pointerCache);
     const value = structuredClone(lookupValueOrThrow(doc, fromPath, op.from, opIndex));
-    if (op.op === "move") {
-      doc = applyPatchOpToJson(doc, { op: "remove", path: op.from }, opIndex);
-    }
-    return applyPatchOpToJson(doc, { op: "add", path: op.path, value }, opIndex);
+    const docAfterRemove =
+      op.op === "move"
+        ? applyPatchOpToJsonInPlace(doc, { op: "remove", path: op.from }, opIndex, pointerCache)
+        : doc;
+    return applyPatchOpToJsonInPlace(
+      docAfterRemove,
+      { op: "add", path: op.path, value },
+      opIndex,
+      pointerCache,
+    );
   }
 
-  const path = parsePointerOrThrow(op.path, op.path, opIndex);
+  const path = parsePointerOrThrow(op.path, op.path, opIndex, pointerCache);
   if (path.length === 0) {
     if (op.op === "add" || op.op === "replace") {
       return structuredClone(op.value);
@@ -589,12 +619,8 @@ function applyPatchOpToJson(baseJson: JsonValue, op: JsonPatchOp, opIndex: numbe
 
   const parentPath = path.slice(0, -1);
   const token = path[path.length - 1]!;
-  let parent: JsonValue;
-  if (parentPath.length === 0) {
-    parent = doc;
-  } else {
-    parent = lookupValueOrThrow(doc, parentPath, op.path, opIndex);
-  }
+  const parent =
+    parentPath.length === 0 ? doc : lookupValueOrThrow(doc, parentPath, op.path, opIndex);
 
   if (Array.isArray(parent)) {
     const index = parseArrayIndexToken(token, op.op, parent.length, op.path, opIndex);
@@ -635,9 +661,21 @@ function applyPatchOpToJson(baseJson: JsonValue, op: JsonPatchOp, opIndex: numbe
   return doc;
 }
 
-function parsePointerOrThrow(ptr: string, path: string, opIndex: number): string[] {
+function parsePointerOrThrow(
+  ptr: string,
+  path: string,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): string[] {
+  const cached = pointerCache.get(ptr);
+  if (cached) {
+    return cached;
+  }
+
   try {
-    return parseJsonPointer(ptr);
+    const parsed = parseJsonPointer(ptr);
+    pointerCache.set(ptr, parsed);
+    return parsed;
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid pointer";
     throw compileError("INVALID_POINTER", message, path, opIndex);
