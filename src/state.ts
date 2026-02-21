@@ -293,6 +293,7 @@ function applyPatchInternal(
         const baseStep = applyPatchInternal(explicitBaseState, [op], {
           semantics: "sequential",
           testAgainst: "base",
+          strictParents: options.strictParents,
         });
         if (!baseStep.ok) {
           return baseStep;
