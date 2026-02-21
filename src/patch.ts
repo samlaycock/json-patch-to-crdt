@@ -127,11 +127,12 @@ export function getAtJson(base: JsonValue, path: string[]): JsonValue {
 
       cur = cur[idx];
     } else if (cur && typeof cur === "object") {
-      if (!(seg in cur)) {
+      const obj = cur as Record<string, JsonValue>;
+      if (!hasOwn(obj, seg)) {
         throw new JsonLookupError("MISSING_KEY", seg, `Missing key '${seg}'`);
       }
 
-      cur = cur[seg];
+      cur = obj[seg];
     } else {
       throw new JsonLookupError(
         "NON_CONTAINER",
@@ -387,7 +388,7 @@ export function jsonEquals(a: JsonValue, b: JsonValue): boolean {
   }
 
   for (const key of aKeys) {
-    if (!(key in b)) {
+    if (!hasOwn(b, key)) {
       return false;
     }
     if (!jsonEquals(a[key]!, b[key]!)) {
@@ -406,6 +407,10 @@ const ARRAY_INDEX_TOKEN_PATTERN = /^(0|[1-9][0-9]*)$/;
 
 function hasOwn(value: Record<string, JsonValue>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isUnsafeObjectKey(key: string): boolean {
+  return key === "__proto__";
 }
 
 function pathValueAt(base: JsonValue, path: string[]): JsonValue {
@@ -529,6 +534,10 @@ function compileSingleOp(
     );
   }
 
+  if (isUnsafeObjectKey(token)) {
+    throw compileError("INVALID_POINTER", `unsafe object key at ${op.path}`, op.path, opIndex);
+  }
+
   if ((op.op === "replace" || op.op === "remove") && !hasOwn(parentValue, token)) {
     throw compileError("MISSING_TARGET", `missing key ${token} at ${parentPath}`, op.path, opIndex);
   }
@@ -611,6 +620,10 @@ function applyPatchOpToJson(baseJson: JsonValue, op: JsonPatchOp, opIndex: numbe
       op.path,
       opIndex,
     );
+  }
+
+  if (isUnsafeObjectKey(token)) {
+    throw compileError("INVALID_POINTER", `unsafe object key at ${op.path}`, op.path, opIndex);
   }
 
   if (op.op === "add" || op.op === "replace") {
