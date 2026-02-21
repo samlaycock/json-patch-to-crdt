@@ -169,6 +169,7 @@ export type ApplyPatchAsActorOptions = {
   base?: Doc;
   testAgainst?: "head" | "base";
   semantics?: PatchSemantics;
+  strictParents?: boolean;
 };
 
 /** Typed failure reason used across patch/merge helpers. */
@@ -221,6 +222,12 @@ export type ApplyPatchOptions = {
   base?: CrdtState;
   testAgainst?: "head" | "base";
   semantics?: PatchSemantics;
+  /**
+   * Reject array inserts when the base parent path is missing.
+   * Defaults to `false` to preserve legacy behavior that can auto-create
+   * missing arrays for index `0` / append intents.
+   */
+  strictParents?: boolean;
 };
 
 /** Options for in-place patch application (`applyPatchInPlace` / `tryApplyPatchInPlace`). */
@@ -307,6 +314,7 @@ export type JsonPatchToCrdtOptions = {
   evalTestAgainst?: "head" | "base";
   bumpCounterAbove?: (ctr: number) => void;
   semantics?: PatchSemantics;
+  strictParents?: boolean;
 };
 
 /** Options for `crdtToJsonPatch` and `diffJsonPatch`. */

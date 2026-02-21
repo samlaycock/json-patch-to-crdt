@@ -253,6 +253,7 @@ function toApplyPatchOptionsForActor(options: ApplyPatchAsActorOptions): ApplyPa
   return {
     semantics: options.semantics,
     testAgainst: options.testAgainst,
+    strictParents: options.strictParents,
     base: options.base
       ? {
           doc: options.base,
@@ -316,6 +317,7 @@ function applyPatchInternal(
     () => state.clock.next(),
     options.testAgainst ?? "head",
     (ctr) => bumpClockCounter(state, ctr),
+    { strictParents: options.strictParents },
   );
 }
 
@@ -429,6 +431,7 @@ function applySinglePatchOp(
     () => state.clock.next(),
     options.testAgainst ?? "head",
     (ctr) => bumpClockCounter(state, ctr),
+    { strictParents: options.strictParents },
   );
 }
 
