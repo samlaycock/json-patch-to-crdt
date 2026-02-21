@@ -161,7 +161,7 @@ export function tryApplyPatch(
   };
 
   try {
-    const result = applyPatchInternal(nextState, patch, options);
+    const result = applyPatchInternal(nextState, patch, options, "batch");
     if (!result.ok) {
       return { ok: false, error: result };
     }
@@ -192,7 +192,7 @@ export function tryApplyPatchInPlace(
   }
 
   try {
-    const result = applyPatchInternal(state, patch, applyOptions);
+    const result = applyPatchInternal(state, patch, applyOptions, "step");
     if (!result.ok) {
       return { ok: false, error: result };
     }
@@ -267,10 +267,29 @@ function applyPatchInternal(
   state: CrdtState,
   patch: JsonPatchOp[],
   options: ApplyPatchOptions,
+  execution: "batch" | "step",
 ): ApplyResult {
   const semantics: PatchSemantics = options.semantics ?? "sequential";
 
   if (semantics === "sequential") {
+    if (!options.base && execution === "batch") {
+      const baseJson = materialize(state.doc.root);
+      const compiled = compileIntents(baseJson, patch, "sequential");
+      if (!compiled.ok) {
+        return compiled;
+      }
+
+      return applyIntentsToCrdt(
+        state.doc,
+        state.doc,
+        compiled.intents,
+        () => state.clock.next(),
+        options.testAgainst ?? "head",
+        (ctr) => bumpClockCounter(state, ctr),
+        { strictParents: options.strictParents },
+      );
+    }
+
     // When callers pass an explicit base, we keep a private shadow copy that advances
     // per operation so array index and pointer resolution remain consistent with RFC 6902.
     const explicitBaseState: CrdtState | null = options.base
@@ -290,11 +309,16 @@ function applyPatchInternal(
       if (explicitBaseState && op.op !== "test") {
         // Replay non-test ops into the explicit-base shadow so the next sequential op
         // resolves paths against the same evolving snapshot the compiler expects.
-        const baseStep = applyPatchInternal(explicitBaseState, [op], {
-          semantics: "sequential",
-          testAgainst: "base",
-          strictParents: options.strictParents,
-        });
+        const baseStep = applyPatchInternal(
+          explicitBaseState,
+          [op],
+          {
+            semantics: "sequential",
+            testAgainst: "base",
+            strictParents: options.strictParents,
+          },
+          "step",
+        );
         if (!baseStep.ok) {
           return baseStep;
         }

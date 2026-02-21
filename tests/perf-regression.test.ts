@@ -41,6 +41,31 @@ describe("performance regressions", () => {
     expect(json.list[499]).toBe(499);
   });
 
+  it("keeps sequential add/remove batches aligned on evolving snapshots", () => {
+    const base = createState(
+      {
+        list: Array.from({ length: 200 }, (_, idx) => idx),
+      },
+      { actor: "perf" },
+    );
+    const patch: JsonPatchOp[] = [];
+    for (let i = 0; i < 150; i++) {
+      patch.push({ op: "add", path: "/list/0", value: -(i + 1) });
+      patch.push({ op: "remove", path: "/list/1" });
+    }
+
+    const next = applyPatch(base, patch, {
+      semantics: "sequential",
+      testAgainst: "base",
+    });
+    const json = toJson(next) as { list: number[] };
+
+    expect(json.list).toHaveLength(200);
+    expect(json.list[0]).toBe(-150);
+    expect(json.list[1]).toBe(1);
+    expect(json.list[199]).toBe(199);
+  });
+
   it("compacts high-volume stable tombstones without changing materialized output", () => {
     const initial: Record<string, JsonValue> = {};
     for (let i = 0; i < 400; i++) {
