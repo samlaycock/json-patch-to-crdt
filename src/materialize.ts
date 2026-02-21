@@ -3,13 +3,30 @@ import type { JsonValue, Node } from "./types";
 import { assertTraversalDepth } from "./depth";
 import { rgaLinearizeIds } from "./rga";
 
+function createMaterializedObject(): Record<string, JsonValue> {
+  return Object.create(null) as Record<string, JsonValue>;
+}
+
+function setMaterializedProperty(
+  out: Record<string, JsonValue>,
+  key: string,
+  value: JsonValue,
+): void {
+  Object.defineProperty(out, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
 /** Convert a CRDT node graph into a plain JSON value using an explicit stack. */
 export function materialize(node: Node): JsonValue {
   if (node.kind === "lww") {
     return node.value;
   }
 
-  const root: JsonValue = node.kind === "obj" ? {} : [];
+  const root: JsonValue = node.kind === "obj" ? createMaterializedObject() : [];
   type ObjFrame = {
     kind: "obj";
     depth: number;
@@ -60,13 +77,13 @@ export function materialize(node: Node): JsonValue {
       assertTraversalDepth(childDepth);
 
       if (child.kind === "lww") {
-        frame.out[key] = child.value;
+        setMaterializedProperty(frame.out, key, child.value);
         continue;
       }
 
       if (child.kind === "obj") {
-        const outObj: Record<string, JsonValue> = {};
-        frame.out[key] = outObj;
+        const outObj = createMaterializedObject();
+        setMaterializedProperty(frame.out, key, outObj);
         stack.push({
           kind: "obj",
           depth: childDepth,
@@ -81,7 +98,7 @@ export function materialize(node: Node): JsonValue {
       }
 
       const outArr: JsonValue[] = [];
-      frame.out[key] = outArr;
+      setMaterializedProperty(frame.out, key, outArr);
       stack.push({
         kind: "seq",
         depth: childDepth,
@@ -109,7 +126,7 @@ export function materialize(node: Node): JsonValue {
     }
 
     if (child.kind === "obj") {
-      const outObj: Record<string, JsonValue> = {};
+      const outObj = createMaterializedObject();
       frame.out.push(outObj);
       stack.push({
         kind: "obj",

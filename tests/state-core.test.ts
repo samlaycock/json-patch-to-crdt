@@ -745,6 +745,31 @@ describe("materialize", () => {
     expect(materialize(root)).toEqual({ arr: ["x"], num: 42 });
   });
 
+  it("preserves unsafe keys as data without mutating output prototypes", () => {
+    const value = JSON.parse(
+      '{"__proto__":{"x":1},"constructor":{"prototype":{"polluted":true}},"prototype":{"y":2},"nested":{"__proto__":{"z":3}},"arr":[{"__proto__":{"k":4}}]}',
+    ) as Record<string, JsonValue>;
+    const doc = docFromJsonWithDot(value, dot("A", 1));
+    const out = materialize(doc.root) as Record<string, JsonValue>;
+    const rootProto = Object.getPrototypeOf(out) as { x?: number } | null;
+    const nested = out.nested as Record<string, JsonValue>;
+    const nestedProto = Object.getPrototypeOf(nested) as { z?: number } | null;
+    const arrItem = (out.arr as JsonValue[])[0] as Record<string, JsonValue>;
+    const arrItemProto = Object.getPrototypeOf(arrItem) as { k?: number } | null;
+
+    expect(Object.prototype.hasOwnProperty.call(out, "__proto__")).toBeTrue();
+    expect((out.__proto__ as Record<string, JsonValue>).x).toBe(1);
+    expect(rootProto?.x).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(nested, "__proto__")).toBeTrue();
+    expect((nested.__proto__ as Record<string, JsonValue>).z).toBe(3);
+    expect(nestedProto?.z).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(arrItem, "__proto__")).toBeTrue();
+    expect((arrItem.__proto__ as Record<string, JsonValue>).k).toBe(4);
+    expect(arrItemProto?.k).toBeUndefined();
+    expect((Object.prototype as Record<string, JsonValue>).polluted).toBeUndefined();
+    expect(out).toEqual(value);
+  });
+
   it("round-trips docFromJson for objects", () => {
     const value: JsonValue = { a: 1, b: [true, { c: "x" }], d: null };
     const doc = docFromJsonWithDot(value, dot("A", 1));
