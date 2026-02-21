@@ -6,11 +6,13 @@ export type {
   ApplyError,
   ApplyPatchInPlaceOptions,
   ApplyPatchOptions,
+  CreateStateOptions,
   CrdtState,
   CompactStateTombstonesResult,
   DiffOptions,
   DeserializeErrorReason,
   ForkStateOptions,
+  JsonValidationMode,
   JsonPatch,
   JsonPatchOp,
   JsonPrimitive,
@@ -39,6 +41,8 @@ export {
   tryApplyPatchInPlace,
   validateJsonPatch,
 } from "./state";
+
+export { JsonValueValidationError } from "./json-value";
 
 // JSON helpers
 export { diffJsonPatch } from "./patch";

@@ -6,10 +6,12 @@ import type {
   ApplyPatchInPlaceOptions,
   ApplyPatchOptions,
   ApplyResult,
+  CreateStateOptions,
   CrdtState,
   Doc,
   ForkStateOptions,
   IntentOp,
+  JsonValidationMode,
   JsonPatchOp,
   JsonValue,
   Node,
@@ -24,6 +26,11 @@ import type {
 import { createClock, cloneClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
+import {
+  JsonValueValidationError,
+  assertRuntimeJsonValue,
+  coerceRuntimeJsonValue,
+} from "./json-value";
 import { materialize } from "./materialize";
 import {
   PatchCompileError,
@@ -68,12 +75,10 @@ export class PatchError extends Error {
  * @param options - Actor ID and optional starting counter.
  * @returns A new `CrdtState` containing the document and clock.
  */
-export function createState(
-  initial: JsonValue,
-  options: { actor: ActorId; start?: number },
-): CrdtState {
+export function createState(initial: JsonValue, options: CreateStateOptions): CrdtState {
   const clock = createClock(options.actor, options.start ?? 0);
-  const doc = docFromJson(initial, clock.next);
+  const normalizedInitial = coerceRuntimeJsonValue(initial, options.jsonValidation ?? "none");
+  const doc = docFromJson(normalizedInitial, clock.next);
   return { doc, clock };
 }
 
@@ -212,7 +217,10 @@ export function validateJsonPatch(
   patch: JsonPatchOp[],
   options: ApplyPatchOptions = {},
 ): ValidatePatchResult {
-  const state = createState(base, { actor: "__validate__" });
+  const state = createState(base, {
+    actor: "__validate__",
+    jsonValidation: options.jsonValidation,
+  });
   const result = tryApplyPatch(state, patch, options);
   if (!result.ok) {
     return { ok: false, error: result.error };
@@ -254,6 +262,7 @@ function toApplyPatchOptionsForActor(options: ApplyPatchAsActorOptions): ApplyPa
     semantics: options.semantics,
     testAgainst: options.testAgainst,
     strictParents: options.strictParents,
+    jsonValidation: options.jsonValidation,
     base: options.base
       ? {
           doc: options.base,
@@ -274,7 +283,12 @@ function applyPatchInternal(
   if (semantics === "sequential") {
     if (!options.base && execution === "batch") {
       const baseJson = materialize(state.doc.root);
-      const compiled = compileIntents(baseJson, patch, "sequential");
+      const compiled = compileIntents(
+        baseJson,
+        patch,
+        "sequential",
+        options.jsonValidation ?? "none",
+      );
       if (!compiled.ok) {
         return compiled;
       }
@@ -330,7 +344,7 @@ function applyPatchInternal(
 
   const baseDoc = options.base ? options.base.doc : cloneDoc(state.doc);
   const baseJson = materialize(baseDoc.root);
-  const compiled = compileIntents(baseJson, patch, "base");
+  const compiled = compileIntents(baseJson, patch, "base", options.jsonValidation ?? "none");
   if (!compiled.ok) {
     return compiled;
   }
@@ -444,7 +458,7 @@ function applySinglePatchOp(
   op: JsonPatchOp,
   options: ApplyPatchOptions,
 ): ApplyResult {
-  const compiled = compileIntents(baseJson, [op], "sequential");
+  const compiled = compileIntents(baseJson, [op], "sequential", options.jsonValidation ?? "none");
   if (!compiled.ok) {
     return compiled;
   }
@@ -470,17 +484,83 @@ function compileIntents(
   baseJson: JsonValue,
   patch: JsonPatchOp[],
   semantics: PatchSemantics = "sequential",
+  jsonValidation: JsonValidationMode = "none",
 ): { ok: true; intents: IntentOp[] } | ApplyError {
   try {
+    const runtimePatch = preparePatchPayloads(patch, jsonValidation);
+
     return {
       ok: true,
-      intents: compileJsonPatchToIntent(baseJson, patch, {
+      intents: compileJsonPatchToIntent(baseJson, runtimePatch, {
         semantics,
       }),
     };
   } catch (error) {
     return toApplyError(error);
   }
+}
+
+function preparePatchPayloads(patch: JsonPatchOp[], mode: JsonValidationMode): JsonPatchOp[] {
+  if (mode === "none") {
+    return patch;
+  }
+
+  const out: JsonPatchOp[] = [];
+
+  for (const [opIndex, op] of patch.entries()) {
+    if (op.op === "move" || op.op === "copy" || op.op === "remove") {
+      out.push(op);
+      continue;
+    }
+
+    if (mode === "strict") {
+      try {
+        assertRuntimeJsonValue(op.value);
+      } catch (error) {
+        if (error instanceof JsonValueValidationError) {
+          throw patchPayloadCompileError(op, opIndex, error);
+        }
+
+        throw error;
+      }
+
+      out.push(op);
+      continue;
+    }
+
+    out.push({
+      ...op,
+      value: coerceRuntimeJsonValue(op.value, mode),
+    });
+  }
+
+  return out;
+}
+
+function patchPayloadCompileError(
+  op: Extract<JsonPatchOp, { value: JsonValue }>,
+  opIndex: number,
+  error: JsonValueValidationError,
+): PatchCompileError {
+  const path = mergePointerPaths(op.path, error.path);
+  return new PatchCompileError(
+    "INVALID_PATCH",
+    `invalid JSON value for '${op.op}' at ${path === "" ? "<root>" : path}: ${error.detail}`,
+    path,
+    opIndex,
+  );
+}
+
+function mergePointerPaths(basePointer: string, nestedPointer: string): string {
+  if (nestedPointer === "") {
+    return basePointer;
+  }
+
+  if (basePointer === "") {
+    return nestedPointer;
+  }
+
+  return `${basePointer}${nestedPointer}`;
 }
 
 function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
