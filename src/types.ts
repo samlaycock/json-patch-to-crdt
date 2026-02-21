@@ -19,6 +19,14 @@ export type JsonPrimitive = null | boolean | number | string;
 /** Any JSON-compatible value (primitives, arrays, and plain objects). */
 export type JsonValue = JsonPrimitive | JsonValue[] | { [k: string]: JsonValue };
 
+/**
+ * Runtime handling mode for non-JSON inputs received through `any` / untyped callers.
+ * - `"none"`: keep current behavior (no extra runtime guardrails).
+ * - `"strict"`: reject invalid values (e.g. `NaN`, `Infinity`, `undefined`).
+ * - `"normalize"`: coerce invalid values into JSON-safe output.
+ */
+export type JsonValidationMode = "none" | "strict" | "normalize";
+
 // ---
 
 /** Mutable clock that tracks an actor's identity and monotonic counter. */
@@ -147,6 +155,17 @@ export type Doc = { root: Node };
 /** Combined CRDT state: a document and its associated clock. */
 export type CrdtState = { doc: Doc; clock: Clock };
 
+/** Options for `createState`. */
+export interface CreateStateOptions {
+  actor: ActorId;
+  start?: number;
+  /**
+   * Runtime guardrails for non-JSON values from untyped callers.
+   * Defaults to `"none"` for backward compatibility.
+   */
+  jsonValidation?: JsonValidationMode;
+}
+
 /** Options for `forkState`. */
 export interface ForkStateOptions {
   /**
@@ -170,6 +189,7 @@ export type ApplyPatchAsActorOptions = {
   testAgainst?: "head" | "base";
   semantics?: PatchSemantics;
   strictParents?: boolean;
+  jsonValidation?: JsonValidationMode;
 };
 
 /** Typed failure reason used across patch/merge helpers. */
@@ -228,6 +248,11 @@ export type ApplyPatchOptions = {
    * missing arrays for index `0` / append intents.
    */
   strictParents?: boolean;
+  /**
+   * Runtime guardrails for patch payload values from untyped callers.
+   * Defaults to `"none"` for backward compatibility.
+   */
+  jsonValidation?: JsonValidationMode;
 };
 
 /** Options for in-place patch application (`applyPatchInPlace` / `tryApplyPatchInPlace`). */
@@ -332,6 +357,11 @@ export type DiffOptions = {
    * Set to `Number.POSITIVE_INFINITY` to always allow LCS.
    */
   lcsMaxCells?: number;
+  /**
+   * Runtime guardrails for diff inputs from untyped callers.
+   * Defaults to `"none"` for backward compatibility.
+   */
+  jsonValidation?: JsonValidationMode;
 };
 
 /**

@@ -261,6 +261,31 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "", value: 2 }]);
   });
 
+  it("rejects non-JSON runtime values in strict jsonValidation mode", () => {
+    expect(() =>
+      diffJsonPatch(
+        { n: Number.NaN } as unknown as JsonValue,
+        { n: 1 },
+        { jsonValidation: "strict" },
+      ),
+    ).toThrow("non-finite number");
+    expect(() =>
+      diffJsonPatch({}, { nested: { missing: undefined } } as unknown as JsonValue, {
+        jsonValidation: "strict",
+      }),
+    ).toThrow("undefined");
+  });
+
+  it("normalizes non-JSON runtime values in normalize jsonValidation mode", () => {
+    const ops = diffJsonPatch(
+      { n: Number.NaN, arr: [undefined], keep: { x: 1 } } as unknown as JsonValue,
+      { n: null, arr: [null], keep: { x: 1 }, drop: undefined } as unknown as JsonValue,
+      { jsonValidation: "normalize" },
+    );
+
+    expect(ops).toEqual([]);
+  });
+
   it("adds and removes object keys", () => {
     const base: JsonValue = { a: 1, b: 2 };
     const next: JsonValue = { b: 2, c: 3 };

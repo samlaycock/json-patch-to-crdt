@@ -7,6 +7,7 @@ import type {
   PatchErrorReason,
 } from "./types";
 
+import { coerceRuntimeJsonValue } from "./json-value";
 import { ROOT_KEY } from "./types";
 
 const DEFAULT_LCS_MAX_CELLS = 250_000;
@@ -190,8 +191,11 @@ export function diffJsonPatch(
   next: JsonValue,
   options: DiffOptions = {},
 ): JsonPatchOp[] {
+  const runtimeMode = options.jsonValidation ?? "none";
+  const runtimeBase = coerceRuntimeJsonValue(base, runtimeMode);
+  const runtimeNext = coerceRuntimeJsonValue(next, runtimeMode);
   const ops: JsonPatchOp[] = [];
-  diffValue([], base, next, ops, options);
+  diffValue([], runtimeBase, runtimeNext, ops, options);
   return ops;
 }
 

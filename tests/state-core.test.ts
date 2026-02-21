@@ -178,6 +178,40 @@ describe("clock and state", () => {
     expect(state.clock.ctr).toBe(1);
   });
 
+  it("rejects non-JSON initial values in strict jsonValidation mode", () => {
+    expect(() =>
+      createState({ n: Number.NaN } as unknown as JsonValue, {
+        actor: "A",
+        jsonValidation: "strict",
+      }),
+    ).toThrow("non-finite number");
+    expect(() =>
+      createState({ nested: { missing: undefined } } as unknown as JsonValue, {
+        actor: "A",
+        jsonValidation: "strict",
+      }),
+    ).toThrow("undefined");
+  });
+
+  it("normalizes non-JSON initial values in normalize jsonValidation mode", () => {
+    const state = createState(
+      {
+        n: Number.NaN,
+        inf: Number.POSITIVE_INFINITY,
+        nested: { keep: true, drop: undefined },
+        arr: [1, undefined, Number.NEGATIVE_INFINITY],
+      } as unknown as JsonValue,
+      { actor: "A", jsonValidation: "normalize" },
+    );
+
+    expect(toJson(state)).toEqual({
+      n: null,
+      inf: null,
+      nested: { keep: true },
+      arr: [1, null, null],
+    });
+  });
+
   it("handles deeply nested objects in createState and toJson", () => {
     const depth = 8_000;
     const deepValue = makeDeepObject(depth, "leaf");
@@ -226,6 +260,54 @@ describe("clock and state", () => {
     const next = applyPatch(state, [{ op: "add", path: "/list/-", value: "b" }]);
     expect(toJson(state)).toEqual({ list: ["a"] });
     expect(toJson(next)).toEqual({ list: ["a", "b"] });
+  });
+
+  it("rejects non-JSON patch values in strict jsonValidation mode", () => {
+    const state = createState({}, { actor: "A" });
+    const result = tryApplyPatch(
+      state,
+      [{ op: "add", path: "/payload", value: Number.NaN as unknown as JsonValue }],
+      { jsonValidation: "strict" },
+    );
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_PATCH");
+      expect(result.error.path).toBe("/payload");
+      expect(result.error.opIndex).toBe(0);
+      expect(result.error.message).toContain("non-finite number");
+    }
+
+    expect(toJson(state)).toEqual({});
+  });
+
+  it("normalizes non-JSON patch values in normalize jsonValidation mode", () => {
+    const state = createState({}, { actor: "A" });
+    const next = applyPatch(
+      state,
+      [
+        {
+          op: "add",
+          path: "/payload",
+          value: {
+            keep: 1,
+            n: Number.NaN,
+            nested: { skip: undefined, ok: true },
+            arr: [undefined, Number.POSITIVE_INFINITY],
+          } as unknown as JsonValue,
+        },
+      ],
+      { jsonValidation: "normalize" },
+    );
+
+    expect(toJson(next)).toEqual({
+      payload: {
+        keep: 1,
+        n: null,
+        nested: { ok: true },
+        arr: [null, null],
+      },
+    });
   });
 
   it("applies patches over deeply nested state without overflowing", () => {
@@ -623,6 +705,21 @@ describe("clock and state", () => {
     }
 
     expect(base).toEqual({ list: ["a"] });
+  });
+
+  it("validates strict jsonValidation patch payloads", () => {
+    const result = validateJsonPatch(
+      {},
+      [{ op: "add", path: "/n", value: Number.NaN as unknown as JsonValue }],
+      { jsonValidation: "strict" },
+    );
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_PATCH");
+      expect(result.error.path).toBe("/n");
+      expect(result.error.opIndex).toBe(0);
+    }
   });
 });
 

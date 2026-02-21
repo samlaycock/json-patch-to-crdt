@@ -183,6 +183,35 @@ If you prefer a non-throwing low-level compile+apply path, use `jsonPatchToCrdtS
 - `"-"` is treated as append for array inserts.
 - `test` operations can be evaluated against `head` or `base` using the `testAgainst` option.
 
+## Runtime JSON Guardrails
+
+By default, runtime inputs are accepted as-is (`jsonValidation: "none"`) for backward compatibility.
+
+You can opt into stricter runtime behavior on `createState`, `applyPatch`/`tryApplyPatch`/`validateJsonPatch`, and `diffJsonPatch`:
+
+- `jsonValidation: "strict"`: reject non-JSON runtime values (for example `NaN`, `Infinity`, and `undefined`).
+- `jsonValidation: "normalize"`: coerce non-JSON values into JSON-safe values.
+  - non-finite numbers become `null`
+  - invalid array elements become `null`
+  - invalid object-property values are omitted
+
+Examples:
+
+```ts
+const strictState = createState(payload as any, {
+  actor: "A",
+  jsonValidation: "strict",
+});
+
+const next = applyPatch(state, patch as any, {
+  jsonValidation: "normalize",
+});
+
+const delta = diffJsonPatch(base as any, target as any, {
+  jsonValidation: "strict",
+});
+```
+
 ### Semantics Modes
 
 - `semantics: "sequential"` (default): applies operations one-by-one against the evolving head (RFC-like execution).
@@ -387,8 +416,9 @@ Internals helpers like `jsonPatchToCrdtSafe` and `tryMergeDoc` return the same s
 - `tryApplyPatchInPlace(state, patch, options?)` - Non-throwing in-place apply result.
 - `validateJsonPatch(baseJson, patch, options?)` - Preflight patch validation (non-mutating).
 - `toJson(docOrState)` - Materialize a JSON value from a doc or state.
-- `applyPatch`/`tryApplyPatch` options: `base` expects a prior `CrdtState` snapshot (not a raw doc), plus `semantics` and `testAgainst`.
+- `applyPatch`/`tryApplyPatch` options: `base` expects a prior `CrdtState` snapshot (not a raw doc), plus `semantics`, `testAgainst`, and optional `jsonValidation` runtime guardrails.
 - `PatchError` - Error class thrown for failed patches (`code`, `reason`, `message`, optional `path`/`opIndex`).
+- `JsonValueValidationError` - Error class thrown by strict runtime validation in APIs that accept raw JSON values (for example `createState` and `diffJsonPatch`).
 
 ### Merge helpers
 
@@ -398,7 +428,7 @@ Internals helpers like `jsonPatchToCrdtSafe` and `tryMergeDoc` return the same s
 
 ### Patch helpers
 
-- `diffJsonPatch(baseJson, nextJson, options?)` - Compute a JSON Patch delta between two JSON values.
+- `diffJsonPatch(baseJson, nextJson, options?)` - Compute a JSON Patch delta between two JSON values (`arrayStrategy`, `lcsMaxCells`, and optional `jsonValidation` guardrails).
 
 ### Serialization
 
