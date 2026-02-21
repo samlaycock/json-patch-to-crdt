@@ -669,13 +669,14 @@ function parsePointerOrThrow(
 ): string[] {
   const cached = pointerCache.get(ptr);
   if (cached) {
-    return cached;
+    // Return a copy so callers cannot mutate the cached pointer segments.
+    return cached.slice();
   }
 
   try {
     const parsed = parseJsonPointer(ptr);
     pointerCache.set(ptr, parsed);
-    return parsed;
+    return parsed.slice();
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid pointer";
     throw compileError("INVALID_POINTER", message, path, opIndex);
