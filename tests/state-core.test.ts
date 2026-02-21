@@ -351,6 +351,19 @@ describe("clock and state", () => {
     expect(toJson(headWithReplace)).toEqual({ list: ["a", "x", "B"] });
   });
 
+  it("rejects base-aware array inserts when head path diverged to non-array", () => {
+    const base = createState({ a: ["x"] }, { actor: "A" });
+    const head = applyPatch(base, [{ op: "replace", path: "/a", value: { k: 1 } }]);
+
+    const result = tryApplyPatch(head, [{ op: "add", path: "/a/0", value: "y" }], { base });
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_TARGET");
+      expect(result.error.path).toBe("/a");
+    }
+  });
+
   it("supports sequential patch semantics against the evolving head", () => {
     const state = createState({ list: [1, 2] }, { actor: "A" });
     const next = applyPatch(state, [{ op: "add", path: "/list/0", value: 99 }], {

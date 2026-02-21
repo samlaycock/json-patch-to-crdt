@@ -175,6 +175,55 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
   return head.root as RgaSeq;
 }
 
+function getNodeAtPath(doc: Doc, path: string[]): Node | undefined {
+  let cur: Node = doc.root;
+
+  for (const seg of path) {
+    if (cur.kind !== "obj") {
+      return undefined;
+    }
+
+    const ent = (cur as ObjNode).entries.get(seg);
+    if (!ent) {
+      return undefined;
+    }
+
+    cur = ent.node;
+  }
+
+  return cur;
+}
+
+function getHeadSeqForBaseArrayIntent(
+  head: Doc,
+  path: string[],
+): { ok: true; seq: RgaSeq } | ApplyError {
+  const pointer = `/${path.join("/")}`;
+  const headNode = getNodeAtPath(head, path);
+
+  if (!headNode) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_PARENT",
+      message: `head array missing at ${pointer}`,
+      path: pointer,
+    };
+  }
+
+  if (headNode.kind !== "seq") {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_TARGET",
+      message: `expected array at ${pointer}`,
+      path: pointer,
+    };
+  }
+
+  return { ok: true, seq: headNode };
+}
+
 function deepNodeFromJson(value: JsonValue, dot: Dot): Node {
   return deepNodeFromJsonWithDepth(value, dot, 0);
 }
@@ -552,7 +601,12 @@ function applyArrInsert(
     };
   }
 
-  const headSeq = ensureSeqAtPath(head, it.path, newDot());
+  const _d = newDot();
+  const headSeqRes = getHeadSeqForBaseArrayIntent(head, it.path);
+  if (!headSeqRes.ok) {
+    return headSeqRes;
+  }
+  const headSeq = headSeqRes.seq;
   const idx = it.index === Number.POSITIVE_INFINITY ? rgaLinearizeIds(baseSeq).length : it.index;
   const baseLen = rgaLinearizeIds(baseSeq).length;
 
@@ -631,7 +685,7 @@ function applyArrDelete(
   it: Extract<IntentOp, { t: "ArrDelete" }>,
   newDot: () => Dot,
 ): ApplyResult | null {
-  const d = newDot();
+  const _d = newDot();
   const baseSeq = getSeqAtPath(base, it.path);
 
   if (!baseSeq) {
@@ -644,7 +698,11 @@ function applyArrDelete(
     };
   }
 
-  const headSeq = ensureSeqAtPath(head, it.path, d);
+  const headSeqRes = getHeadSeqForBaseArrayIntent(head, it.path);
+  if (!headSeqRes.ok) {
+    return headSeqRes;
+  }
+  const headSeq = headSeqRes.seq;
   const baseId = rgaIdAtIndex(baseSeq, it.index);
 
   if (!baseId) {
@@ -668,7 +726,7 @@ function applyArrReplace(
   it: Extract<IntentOp, { t: "ArrReplace" }>,
   newDot: () => Dot,
 ): ApplyResult | null {
-  const d = newDot();
+  const _d = newDot();
   const baseSeq = getSeqAtPath(base, it.path);
 
   if (!baseSeq) {
@@ -681,7 +739,11 @@ function applyArrReplace(
     };
   }
 
-  const headSeq = ensureSeqAtPath(head, it.path, d);
+  const headSeqRes = getHeadSeqForBaseArrayIntent(head, it.path);
+  if (!headSeqRes.ok) {
+    return headSeqRes;
+  }
+  const headSeq = headSeqRes.seq;
   const baseId = rgaIdAtIndex(baseSeq, it.index);
 
   if (!baseId) {
