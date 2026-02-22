@@ -1,5 +1,17 @@
 import type { ActorId, Clock, Dot, VersionVector } from "./types";
 
+export type ClockValidationErrorReason = "INVALID_ACTOR" | "INVALID_COUNTER";
+
+export class ClockValidationError extends TypeError {
+  readonly reason: ClockValidationErrorReason;
+
+  constructor(reason: ClockValidationErrorReason, message: string) {
+    super(message);
+    this.name = "ClockValidationError";
+    this.reason = reason;
+  }
+}
+
 function readVvCounter(vv: VersionVector, actor: ActorId): number {
   if (!Object.prototype.hasOwnProperty.call(vv, actor)) {
     return 0;
@@ -24,6 +36,9 @@ function writeVvCounter(vv: VersionVector, actor: ActorId, counter: number): voi
  * @param start - Initial counter value (defaults to 0).
  */
 export function createClock(actor: ActorId, start = 0): Clock {
+  assertActorId(actor);
+  assertCounter(start);
+
   const clock: Clock = {
     actor,
     ctr: start,
@@ -35,6 +50,21 @@ export function createClock(actor: ActorId, start = 0): Clock {
   };
 
   return clock;
+}
+
+function assertActorId(actor: ActorId): void {
+  if (actor.length === 0) {
+    throw new ClockValidationError("INVALID_ACTOR", "actor must not be empty");
+  }
+}
+
+function assertCounter(counter: number): void {
+  if (!Number.isSafeInteger(counter) || counter < 0) {
+    throw new ClockValidationError(
+      "INVALID_COUNTER",
+      "counter must be a non-negative safe integer",
+    );
+  }
 }
 
 /** Create an independent copy of a clock at the same counter position. */
