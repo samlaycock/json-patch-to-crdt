@@ -1,5 +1,33 @@
 # json-patch-to-crdt
 
+## 0.1.3
+
+### Patch Changes
+
+- a5a27c3: Validate `createClock`/`createState` actor IDs and starting counters up front, throwing a typed `ClockValidationError` for empty actors and invalid counter values instead of allowing states that later fail serialization round-trips.
+- 212920d: Prevent base-aware array intents from coercing diverged head nodes into arrays, and tighten base-aware `remove` so it fails when the mapped base element is missing from the current head lineage. Duplicate removals remain idempotent, while stale-lineage removals now return typed conflicts.
+- d79b83e: Add a `strictParents` patch-application option that disables legacy implicit array parent creation for `ArrInsert` when the base path is missing. By default behavior remains backward compatible, while strict mode now returns `MISSING_PARENT` for missing array parents and includes regression coverage for both strict and non-strict behavior.
+- 1ed9ff7: Optimize sequential patch execution for high-level state APIs by compiling and applying no-base sequential batches in one pass instead of per-operation materialize/compile cycles.
+
+  Reduce sequential compiler overhead by reusing a mutable shadow JSON snapshot and cached parsed pointers during batch compilation, while preserving RFC 6902 semantics and error mapping.
+
+  Expand sequential microbenchmark coverage to include medium and large long-batch scenarios, and add regression coverage for long sequential add/remove programs with `testAgainst: "base"`.
+
+- cfc5fd1: Fix `materialize` and `toJson` so unsafe keys like `__proto__`, `constructor`, and `prototype` are preserved as normal data keys without mutating output object prototypes.
+
+  Harden version vector helpers and CRDT serialization to safely handle dynamic keys using own-property reads and `Object.defineProperty`, preventing `__proto__`-based prototype mutation in defense-in-depth paths.
+
+  Add regression coverage for nested object and array cases, unsafe actor IDs in version vectors, and serialization of unsafe keys.
+
+- 788c7cf: Add regression tests for `getAtJson` to ensure inherited properties like `toString`, `hasOwnProperty`, and `__proto__` are treated as missing JSON keys.
+- 0f5160d: Add optional runtime JSON guardrails for untyped inputs across `createState`, patch application/validation, and `diffJsonPatch` via `jsonValidation: "none" | "strict" | "normalize"`.
+
+  Introduce strict runtime rejection for non-JSON values (for example `NaN`, `Infinity`, and `undefined`) and a normalize mode that coerces non-finite numbers/invalid array items to `null` while omitting invalid object-property values.
+
+  Export `JsonValueValidationError`, document strict-vs-lenient behavior in the README, and add regression coverage for strict and normalize modes.
+
+- 4c535ed: Fix prototype-pollution during patch compilation by limiting JSON object traversal to own properties and rejecting unsafe `__proto__` object-key writes. This prevents failed patches from mutating shared prototypes while keeping error reporting typed.
+
 ## 0.1.2
 
 ### Patch Changes
