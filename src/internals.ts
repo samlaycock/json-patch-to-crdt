@@ -8,7 +8,13 @@ export * from "./index";
 export { applyPatchAsActor } from "./state";
 
 // Clock helpers.
-export { createClock, cloneClock, nextDotForActor, observeDot } from "./clock";
+export {
+  ClockValidationError,
+  createClock,
+  cloneClock,
+  nextDotForActor,
+  observeDot,
+} from "./clock";
 
 // Advanced document/intent helpers.
 export {

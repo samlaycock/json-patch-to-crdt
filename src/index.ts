@@ -43,6 +43,7 @@ export {
 } from "./state";
 
 export { JsonValueValidationError } from "./json-value";
+export { ClockValidationError } from "./clock";
 
 // JSON helpers
 export { diffJsonPatch } from "./patch";

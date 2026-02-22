@@ -18,6 +18,7 @@ import {
   compileJsonPatchToIntent,
   diffJsonPatch,
   createClock,
+  ClockValidationError,
   nextDotForActor,
   observeDot,
   createState,
@@ -153,6 +154,19 @@ describe("clock and state", () => {
     expect(clock.ctr).toBe(5);
   });
 
+  it("rejects empty actor ids when creating clocks", () => {
+    expect(() => createClock("")).toThrow(ClockValidationError);
+    expect(() => createClock("")).toThrow("actor must not be empty");
+  });
+
+  it("rejects invalid starting counters when creating clocks", () => {
+    expect(() => createClock("A", -1)).toThrow(ClockValidationError);
+    expect(() => createClock("A", 1.5)).toThrow(ClockValidationError);
+    expect(() => createClock("A", Number.NaN)).toThrow(ClockValidationError);
+    expect(() => createClock("A", Number.MAX_SAFE_INTEGER + 1)).toThrow(ClockValidationError);
+    expect(() => createClock("A", -1)).toThrow("counter must be a non-negative safe integer");
+  });
+
   it("supports per-actor dot generation from version vectors", () => {
     const vv: VersionVector = {};
     expect(nextDotForActor(vv, "A")).toEqual({ actor: "A", ctr: 1 });
@@ -176,6 +190,11 @@ describe("clock and state", () => {
     const state = createState(1, { actor: "A" });
     expect(toJson(state)).toBe(1);
     expect(state.clock.ctr).toBe(1);
+  });
+
+  it("rejects invalid clock options when creating state", () => {
+    expect(() => createState({}, { actor: "" })).toThrow(ClockValidationError);
+    expect(() => createState({}, { actor: "A", start: -2 })).toThrow(ClockValidationError);
   });
 
   it("rejects non-JSON initial values in strict jsonValidation mode", () => {
