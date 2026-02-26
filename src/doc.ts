@@ -34,6 +34,7 @@ import {
   rgaIdAtIndex,
   rgaInsertAfter,
   rgaLinearizeIds,
+  rgaMaxInsertDotForPrev,
   rgaPrevForInsertAtIndex,
 } from "./rga";
 import { ROOT_KEY } from "./types";
@@ -692,16 +693,7 @@ function nextInsertDotForPrev(
   bumpCounterAbove?: (ctr: number) => void,
 ): { ok: true; dot: Dot } | ApplyError {
   const MAX_INSERT_DOT_ATTEMPTS = 1_024;
-  let maxSiblingDot: Dot | null = null;
-  for (const elem of seq.elems.values()) {
-    if (elem.prev !== prev) {
-      continue;
-    }
-
-    if (!maxSiblingDot || compareDot(elem.insDot, maxSiblingDot) > 0) {
-      maxSiblingDot = elem.insDot;
-    }
-  }
+  const maxSiblingDot = rgaMaxInsertDotForPrev(seq, prev);
 
   if (maxSiblingDot) {
     // Fast-forward external counters so generated dots can stay strictly after

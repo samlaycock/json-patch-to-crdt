@@ -7,6 +7,7 @@ export const HEAD: ElemId = "HEAD";
 // Cache for linearized IDs, invalidated on mutation.
 const linearCache = new WeakMap<RgaSeq, { version: number; ids: ElemId[] }>();
 const seqVersion = new WeakMap<RgaSeq, number>();
+const maxSiblingInsDotByPrevCache = new WeakMap<RgaSeq, Map<ElemId, Dot>>();
 
 function getVersion(seq: RgaSeq): number {
   return seqVersion.get(seq) ?? 0;
@@ -14,6 +15,36 @@ function getVersion(seq: RgaSeq): number {
 
 function bumpVersion(seq: RgaSeq): void {
   seqVersion.set(seq, getVersion(seq) + 1);
+}
+
+function buildMaxSiblingInsDotByPrevIndex(seq: RgaSeq): Map<ElemId, Dot> {
+  const index = new Map<ElemId, Dot>();
+
+  for (const elem of seq.elems.values()) {
+    const current = index.get(elem.prev);
+    if (!current || compareDot(elem.insDot, current) > 0) {
+      index.set(elem.prev, elem.insDot);
+    }
+  }
+
+  maxSiblingInsDotByPrevCache.set(seq, index);
+  return index;
+}
+
+function getMaxSiblingInsDotByPrevIndex(seq: RgaSeq): Map<ElemId, Dot> {
+  return maxSiblingInsDotByPrevCache.get(seq) ?? buildMaxSiblingInsDotByPrevIndex(seq);
+}
+
+function trackInsertedSiblingDot(seq: RgaSeq, prev: ElemId, insDot: Dot): void {
+  const index = maxSiblingInsDotByPrevCache.get(seq);
+  if (!index) {
+    return;
+  }
+
+  const current = index.get(prev);
+  if (!current || compareDot(insDot, current) > 0) {
+    index.set(prev, insDot);
+  }
 }
 
 function rgaChildrenIndex(seq: RgaSeq): Map<ElemId, RgaElem[]> {
@@ -124,6 +155,7 @@ export function rgaInsertAfter(
   }
 
   seq.elems.set(id, { id, prev, tombstone: false, value, insDot });
+  trackInsertedSiblingDot(seq, prev, insDot);
   bumpVersion(seq);
 }
 
@@ -367,8 +399,13 @@ export function rgaCompactTombstones(seq: RgaSeq, isStable: (dot: Dot) => boolea
   for (const id of removable) {
     seq.elems.delete(id);
   }
+  maxSiblingInsDotByPrevCache.delete(seq);
   bumpVersion(seq);
   return removable.size;
+}
+
+export function rgaMaxInsertDotForPrev(seq: RgaSeq, prev: ElemId): Dot | null {
+  return getMaxSiblingInsDotByPrevIndex(seq).get(prev) ?? null;
 }
 
 export function rgaIdAtIndex(seq: RgaSeq, index: number): ElemId | undefined {
