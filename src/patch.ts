@@ -440,7 +440,7 @@ function isPlainObject(value: unknown): value is { [k: string]: JsonValue } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const ARRAY_INDEX_TOKEN_PATTERN = /^(0|[1-9][0-9]*)$/;
+export const ARRAY_INDEX_TOKEN_PATTERN = /^(0|[1-9][0-9]*)$/;
 
 function hasOwn(value: Record<string, JsonValue>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
