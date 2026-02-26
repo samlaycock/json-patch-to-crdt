@@ -1,9 +1,15 @@
 import { describe, expect, it } from "bun:test";
 
 import type { JsonPatchOp, JsonValue } from "../src";
+import type { IntentOp, RgaElem, RgaSeq } from "../src/internals";
 
 import { applyPatch, compactStateTombstones, createState, diffJsonPatch, toJson } from "../src";
-import { compileJsonPatchToIntent } from "../src/internals";
+import {
+  applyIntentsToCrdt,
+  cloneDoc,
+  compileJsonPatchToIntent,
+  docFromJson,
+} from "../src/internals";
 
 describe("performance regressions", () => {
   it("diffs large arrays with a narrow changed window without full-array replace", () => {
@@ -234,5 +240,40 @@ describe("performance regressions", () => {
     }
 
     expect(arrayFromCalls).toBe(0);
+  });
+
+  it("avoids full-sequence sibling scans on repeated array appends", () => {
+    let ctr = 0;
+    const nextDot = () => ({ actor: "perf", ctr: ++ctr });
+    const base = docFromJson({ list: Array.from({ length: 200 }, (_, idx) => idx) }, nextDot);
+    const head = cloneDoc(base);
+    const listEntry = head.root.kind === "obj" ? head.root.entries.get("list") : undefined;
+    expect(listEntry?.node.kind).toBe("seq");
+
+    const seq = listEntry!.node as RgaSeq;
+    const elems = seq.elems as Map<string, RgaElem> & { values: typeof seq.elems.values };
+    const originalValues = elems.values;
+    let valuesCalls = 0;
+
+    elems.values = function values(this: Map<string, RgaElem>) {
+      valuesCalls += 1;
+      return originalValues.call(this);
+    };
+
+    try {
+      const intents: IntentOp[] = Array.from({ length: 120 }, (_, idx) => ({
+        t: "ArrInsert",
+        path: ["list"],
+        index: Number.POSITIVE_INFINITY,
+        value: 10_000 + idx,
+      }));
+
+      const result = applyIntentsToCrdt(base, head, intents, nextDot);
+      expect(result.ok).toBe(true);
+    } finally {
+      elems.values = originalValues;
+    }
+
+    expect(valuesCalls).toBeLessThanOrEqual(3);
   });
 });
