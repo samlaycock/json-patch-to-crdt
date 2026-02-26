@@ -1,5 +1,6 @@
 import type {
   CrdtState,
+  DeserializeFailure,
   Doc,
   DeserializeErrorReason,
   Dot,
@@ -10,10 +11,12 @@ import type {
   SerializedNode,
   SerializedRgaElem,
   SerializedState,
+  TryDeserializeDocResult,
+  TryDeserializeStateResult,
 } from "./types";
 
 import { createClock } from "./clock";
-import { assertTraversalDepth } from "./depth";
+import { TraversalDepthError, assertTraversalDepth } from "./depth";
 import { dotToElemId } from "./dot";
 
 const HEAD_ELEM_ID = "HEAD";
@@ -62,6 +65,20 @@ export function deserializeDoc(data: SerializedDoc): Doc {
   return { root: deserializeNode(data.root, "/root", 0) };
 }
 
+/** Non-throwing `deserializeDoc` variant with typed validation details. */
+export function tryDeserializeDoc(data: SerializedDoc): TryDeserializeDocResult {
+  try {
+    return { ok: true, doc: deserializeDoc(data) };
+  } catch (error) {
+    const deserializeError = toDeserializeFailure(error);
+    if (deserializeError) {
+      return { ok: false, error: deserializeError };
+    }
+
+    throw error;
+  }
+}
+
 /** Serialize a full CRDT state (document + clock) to a JSON-safe representation. */
 export function serializeState(state: CrdtState): SerializedState {
   return {
@@ -90,6 +107,20 @@ export function deserializeState(data: SerializedState): CrdtState {
   const clock = createClock(actor, ctr);
   const doc = deserializeDoc(data.doc);
   return { doc, clock };
+}
+
+/** Non-throwing `deserializeState` variant with typed validation details. */
+export function tryDeserializeState(data: SerializedState): TryDeserializeStateResult {
+  try {
+    return { ok: true, state: deserializeState(data) };
+  } catch (error) {
+    const deserializeError = toDeserializeFailure(error);
+    if (deserializeError) {
+      return { ok: false, error: deserializeError };
+    }
+
+    throw error;
+  }
 }
 
 function serializeNode(node: Doc["root"]): SerializedNode {
@@ -366,6 +397,14 @@ function assertJsonValue(value: unknown, path: string, depth: number): asserts v
 
 function fail(reason: DeserializeErrorReason, path: string, message: string): never {
   throw new DeserializeError(reason, path, message);
+}
+
+function toDeserializeFailure(error: unknown): DeserializeFailure | null {
+  if (error instanceof DeserializeError || error instanceof TraversalDepthError) {
+    return error;
+  }
+
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
