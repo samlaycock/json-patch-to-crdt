@@ -1120,6 +1120,23 @@ describe("serialization", () => {
     expect(toJson(next)).toEqual({ a: 2 });
   });
 
+  it("repairs stale serialized clock counters during state deserialization", () => {
+    const base = createState({ a: 1 }, { actor: "A" });
+    const state = applyPatch(base, [{ op: "add", path: "/b", value: 2 }]);
+    const payload = serializeState(state);
+
+    payload.clock.ctr = Math.max(0, state.clock.ctr - 1);
+
+    const restored = deserializeState(payload);
+
+    expect(restored.clock.actor).toBe("A");
+    expect(restored.clock.ctr).toBe(state.clock.ctr);
+
+    const next = applyPatch(restored, [{ op: "replace", path: "/a", value: 3 }]);
+    expect(toJson(next)).toEqual({ a: 3, b: 2 });
+    expect(next.clock.ctr).toBeGreaterThan(state.clock.ctr);
+  });
+
   it("rejects sequence elements whose key does not match element id", () => {
     const malformed = {
       root: {

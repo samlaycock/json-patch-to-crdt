@@ -104,8 +104,9 @@ export function deserializeState(data: SerializedState): CrdtState {
   const clockRaw = asRecord(data.clock, "/clock");
   const actor = readActor(clockRaw.actor, "/clock/actor");
   const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
-  const clock = createClock(actor, ctr);
   const doc = deserializeDoc(data.doc);
+  const observedCtr = maxObservedCounterForActorInNode(doc.root, actor);
+  const clock = createClock(actor, Math.max(ctr, observedCtr));
   return { doc, clock };
 }
 
@@ -325,6 +326,43 @@ function assertAcyclicRgaPredecessors(elems: Map<string, RgaElem>, path: string)
       visitState.set(id, 2);
     }
   }
+}
+
+function maxObservedCounterForActorInNode(node: Node, actor: string): number {
+  if (node.kind === "lww") {
+    return node.dot.actor === actor ? node.dot.ctr : 0;
+  }
+
+  if (node.kind === "obj") {
+    let maxCtr = 0;
+
+    for (const entry of node.entries.values()) {
+      if (entry.dot.actor === actor) {
+        maxCtr = Math.max(maxCtr, entry.dot.ctr);
+      }
+
+      maxCtr = Math.max(maxCtr, maxObservedCounterForActorInNode(entry.node, actor));
+    }
+
+    for (const tombstoneDot of node.tombstone.values()) {
+      if (tombstoneDot.actor === actor) {
+        maxCtr = Math.max(maxCtr, tombstoneDot.ctr);
+      }
+    }
+
+    return maxCtr;
+  }
+
+  let maxCtr = 0;
+  for (const elem of node.elems.values()) {
+    if (elem.insDot.actor === actor) {
+      maxCtr = Math.max(maxCtr, elem.insDot.ctr);
+    }
+
+    maxCtr = Math.max(maxCtr, maxObservedCounterForActorInNode(elem.value, actor));
+  }
+
+  return maxCtr;
 }
 
 function asRecord(value: unknown, path: string): Record<string, unknown> {
