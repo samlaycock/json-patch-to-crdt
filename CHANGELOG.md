@@ -1,5 +1,24 @@
 # json-patch-to-crdt
 
+## 0.2.1
+
+### Patch Changes
+
+- 0dc6744: Repair `deserializeState` clock restoration by lifting stale serialized actor counters to the
+  highest dot already present in the deserialized document, preventing duplicate dot generation
+  after restart. Includes a regression test for tampered serialized clock metadata.
+- f1a9711: Reduce repeated indexed-array RGA lookups during intent application by reusing per-sequence
+  index snapshots across an apply session and incrementally updating them when base and head share
+  the same evolving array. Includes a perf regression test covering repeated indexed deletes on an
+  evolving base snapshot.
+- cc63450: Add internals RGA validation helpers and a checked insert API to detect missing predecessors, cycles, and orphaned elements in custom sequence construction.
+- afe729c: Optimize array insert dot allocation by caching the max sibling insert dot per predecessor so
+  repeated inserts no longer rescan the full RGA sequence. Includes a performance regression test
+  covering repeated append workloads.
+- a634b99: Fix sequence tombstone compaction so deleted RGA elements are only pruned when the delete event itself is causally stable.
+
+  This stores per-element delete metadata (`delDot`) for sequence tombstones, preserves it through merge/clone/serialization, and adds regression coverage for delete -> compact -> merge without resurrection.
+
 ## 0.2.0
 
 ### Minor Changes
