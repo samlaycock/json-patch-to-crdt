@@ -5,7 +5,7 @@
 export * from "./index";
 
 // Advanced state helper.
-export { applyPatchAsActor } from "./state";
+export { applyPatchAsActor, tryApplyPatchAsActor } from "./state";
 
 // Clock helpers.
 export {
@@ -55,6 +55,7 @@ export { serializeDoc, deserializeDoc, tryDeserializeDoc } from "./serialize";
 export type {
   ApplyPatchAsActorResult,
   ApplyPatchAsActorOptions,
+  TryApplyPatchAsActorResult,
   ApplyResult,
   Clock,
   CompactDocTombstonesResult,

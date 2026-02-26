@@ -208,6 +208,11 @@ export type ApplyPatchAsActorOptions = {
   jsonValidation?: JsonValidationMode;
 };
 
+/** Non-throwing result for internals-only `tryApplyPatchAsActor`. */
+export type TryApplyPatchAsActorResult =
+  | ({ ok: true } & ApplyPatchAsActorResult)
+  | { ok: false; error: ApplyError };
+
 /** Typed failure reason used across patch/merge helpers. */
 export type PatchErrorReason =
   | "INVALID_PATCH"

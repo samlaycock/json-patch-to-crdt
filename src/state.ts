@@ -17,6 +17,7 @@ import type {
   Node,
   PatchErrorReason,
   PatchSemantics,
+  TryApplyPatchAsActorResult,
   TryApplyPatchInPlaceResult,
   TryApplyPatchResult,
   ValidatePatchResult,
@@ -240,6 +241,22 @@ export function applyPatchAsActor(
   patch: JsonPatchOp[],
   options: ApplyPatchAsActorOptions = {},
 ): ApplyPatchAsActorResult {
+  const result = tryApplyPatchAsActor(doc, vv, actor, patch, options);
+  if (!result.ok) {
+    throw new PatchError(result.error);
+  }
+
+  return { state: result.state, vv: result.vv };
+}
+
+/** Non-throwing `applyPatchAsActor` variant for internals sync flows. */
+export function tryApplyPatchAsActor(
+  doc: Doc,
+  vv: VersionVector,
+  actor: ActorId,
+  patch: JsonPatchOp[],
+  options: ApplyPatchAsActorOptions = {},
+): TryApplyPatchAsActorResult {
   const observedCtr = maxCtrInNodeForActor(doc.root, actor);
   const start = Math.max(vv[actor] ?? 0, observedCtr);
 
@@ -248,13 +265,17 @@ export function applyPatchAsActor(
     clock: createClock(actor, start),
   };
 
-  const state = applyPatch(baseState, patch, toApplyPatchOptionsForActor(options));
+  const applied = tryApplyPatch(baseState, patch, toApplyPatchOptionsForActor(options));
+  if (!applied.ok) {
+    return applied;
+  }
+
   const nextVv: VersionVector = {
     ...vv,
-    [actor]: Math.max(vv[actor] ?? 0, state.clock.ctr),
+    [actor]: Math.max(vv[actor] ?? 0, applied.state.clock.ctr),
   };
 
-  return { state, vv: nextVv };
+  return { ok: true, state: applied.state, vv: nextVv };
 }
 
 function toApplyPatchOptionsForActor(options: ApplyPatchAsActorOptions): ApplyPatchOptions {

@@ -11,6 +11,7 @@ import {
   compactDocTombstones,
   compactStateTombstones,
   tryApplyPatch,
+  tryApplyPatchAsActor,
   tryApplyPatchInPlace,
   validateJsonPatch,
   cloneClock,
@@ -610,6 +611,34 @@ describe("clock and state", () => {
     expect(toJson(next.state)).toEqual({ n: 3 });
     expect(next.state.clock.ctr).toBeGreaterThan(advanced.clock.ctr);
     expect(next.vv["A"]).toBe(next.state.clock.ctr);
+  });
+
+  it("exposes a non-throwing applyPatchAsActor helper", () => {
+    const doc = docFromJson({ list: ["a"] }, newDotGen("origin", 0));
+    const vv: VersionVector = {};
+
+    const result = tryApplyPatchAsActor(doc, vv, "A", [{ op: "add", path: "/list/-", value: "b" }]);
+
+    expect(result.ok).toBeTrue();
+    if (result.ok) {
+      expect(toJson(result.state)).toEqual({ list: ["a", "b"] });
+      expect(result.vv["A"]).toBe(result.state.clock.ctr);
+    }
+    expect(materialize(doc.root)).toEqual({ list: ["a"] });
+  });
+
+  it("returns typed errors from tryApplyPatchAsActor", () => {
+    const doc = docFromJson({ a: 1 }, newDotGen("origin", 0));
+    const vv: VersionVector = {};
+    const result = tryApplyPatchAsActor(doc, vv, "A", [{ op: "test", path: "/a", value: 2 }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.code).toBe(409);
+      expect(result.error.reason).toBe("TEST_FAILED");
+    }
+    expect(materialize(doc.root)).toEqual({ a: 1 });
+    expect(vv["A"]).toBeUndefined();
   });
 
   it("exposes non-throwing apply helpers with typed reasons", () => {
