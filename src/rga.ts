@@ -38,7 +38,7 @@ export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
   const ver = getVersion(seq);
   const cached = linearCache.get(seq);
   if (cached && cached.version === ver) {
-    return cached.ids;
+    return [...cached.ids];
   }
 
   const idx = rgaChildrenIndex(seq);
@@ -68,7 +68,7 @@ export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
   }
 
   linearCache.set(seq, { version: ver, ids: out });
-  return out;
+  return [...out];
 }
 
 export function rgaInsertAfter(

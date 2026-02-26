@@ -820,6 +820,22 @@ describe("RGA operations", () => {
     expect(rgaLinearizeIds(seq)).toEqual([id2]);
   });
 
+  it("does not allow external mutation of cached linearized ids", () => {
+    const seq = newSeq();
+    const d1 = dot("A", 1);
+    const d2 = dot("A", 2);
+    const id1 = dotToElemId(d1);
+    const id2 = dotToElemId(d2);
+
+    rgaInsertAfter(seq, "HEAD", id1, d1, newReg("a", d1));
+    rgaInsertAfter(seq, id1, id2, d2, newReg("b", d2));
+
+    const ids = rgaLinearizeIds(seq);
+    ids.length = 0;
+
+    expect(rgaLinearizeIds(seq)).toEqual([id1, id2]);
+  });
+
   it("computes prev id for insert at index", () => {
     const seq = newSeq();
     const d1 = dot("A", 1);
