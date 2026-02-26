@@ -49,7 +49,7 @@ export { compactDocTombstones, compactStateTombstones } from "./compact";
 export { mergeDoc, tryMergeDoc } from "./merge";
 
 // Low-level document serialization helpers.
-export { serializeDoc, deserializeDoc } from "./serialize";
+export { serializeDoc, deserializeDoc, tryDeserializeDoc } from "./serialize";
 
 // Internals-only types.
 export type {
@@ -60,6 +60,7 @@ export type {
   CompactDocTombstonesResult,
   CompactStateTombstonesResult,
   CompilePatchOptions,
+  DeserializeFailure,
   Doc,
   Dot,
   ElemId,
@@ -78,6 +79,7 @@ export type {
   SerializedRgaElem,
   TombstoneCompactionOptions,
   TombstoneCompactionStats,
+  TryDeserializeDocResult,
   TryMergeDocResult,
   VersionVector,
 } from "./types";

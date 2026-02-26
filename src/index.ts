@@ -9,6 +9,7 @@ export type {
   CreateStateOptions,
   CrdtState,
   CompactStateTombstonesResult,
+  DeserializeFailure,
   DiffOptions,
   DeserializeErrorReason,
   ForkStateOptions,
@@ -25,6 +26,7 @@ export type {
   TombstoneCompactionStats,
   TryApplyPatchInPlaceResult,
   TryApplyPatchResult,
+  TryDeserializeStateResult,
   TryMergeStateResult,
   ValidatePatchResult,
 } from "./types";
@@ -49,7 +51,12 @@ export { ClockValidationError } from "./clock";
 export { diffJsonPatch } from "./patch";
 
 // Serialization
-export { DeserializeError, serializeState, deserializeState } from "./serialize";
+export {
+  DeserializeError,
+  serializeState,
+  deserializeState,
+  tryDeserializeState,
+} from "./serialize";
 
 // Merge
 export { MergeError, mergeState, tryMergeState } from "./merge";

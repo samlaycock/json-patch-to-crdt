@@ -53,6 +53,8 @@ import {
   serializeState,
   deserializeDoc,
   deserializeState,
+  tryDeserializeDoc,
+  tryDeserializeState,
   mergeDoc,
   MergeError,
   mergeState,
@@ -1198,6 +1200,77 @@ describe("serialization", () => {
     }
 
     throw new Error("Expected deserializeState to throw for invalid clock shape");
+  });
+
+  it("offers a non-throwing doc deserialization helper", () => {
+    const malformed = {
+      root: {
+        kind: "seq",
+        elems: {
+          "A:1": {
+            id: "A:2",
+            prev: "HEAD",
+            tombstone: false,
+            value: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            insDot: { actor: "A", ctr: 1 },
+          },
+        },
+      },
+    } as unknown as SerializedDoc;
+
+    const result = tryDeserializeDoc(malformed);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected tryDeserializeDoc to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    if (result.error instanceof DeserializeError) {
+      expect(result.error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+      expect(result.error.path).toBe("/root/elems/A:1/id");
+    }
+  });
+
+  it("returns depth errors instead of throwing from non-throwing deserializers", () => {
+    const malformed = {
+      root: {
+        kind: "lww",
+        value: makeDeepObject(MAX_TRAVERSAL_DEPTH + 1, "leaf"),
+        dot: { actor: "A", ctr: 1 },
+      },
+    } as unknown as SerializedDoc;
+
+    const result = tryDeserializeDoc(malformed);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected tryDeserializeDoc to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(TraversalDepthError);
+  });
+
+  it("offers a non-throwing state deserialization helper", () => {
+    const malformed = {
+      doc: {
+        root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+      },
+      clock: {
+        actor: 42,
+        ctr: "bad",
+      },
+    } as unknown;
+
+    const result = tryDeserializeState(malformed as never);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected tryDeserializeState to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    if (result.error instanceof DeserializeError) {
+      expect(result.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+      expect(result.error.path).toBe("/clock/actor");
+    }
   });
 });
 

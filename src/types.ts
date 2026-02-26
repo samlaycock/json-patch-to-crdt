@@ -119,6 +119,22 @@ export type SerializedState = { doc: SerializedDoc; clock: SerializedClock };
 /** Typed reasons for rejecting malformed serialized CRDT payloads. */
 export type DeserializeErrorReason = "INVALID_SERIALIZED_SHAPE" | "INVALID_SERIALIZED_INVARIANT";
 
+/** Structured failure payload used by non-throwing deserialize helpers. */
+export type DeserializeFailure =
+  | {
+      code: 409;
+      reason: DeserializeErrorReason;
+      path: string;
+      message: string;
+    }
+  | {
+      code: 409;
+      reason: "MAX_DEPTH_EXCEEDED";
+      message: string;
+      depth: number;
+      maxDepth: number;
+    };
+
 // ---
 
 /**
@@ -223,6 +239,16 @@ export type ApplyError = {
 
 /** Result of applying a patch: success or structured conflict details. */
 export type ApplyResult = { ok: true } | ApplyError;
+
+/** Non-throwing result for `deserializeDoc`. */
+export type TryDeserializeDocResult =
+  | { ok: true; doc: Doc }
+  | { ok: false; error: DeserializeFailure };
+
+/** Non-throwing result for `deserializeState`. */
+export type TryDeserializeStateResult =
+  | { ok: true; state: CrdtState }
+  | { ok: false; error: DeserializeFailure };
 
 /** How JSON Patch operations are interpreted during application. */
 export type PatchSemantics = "base" | "sequential";
