@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import type { JsonPatchOp, JsonValue } from "../src";
 
 import { applyPatch, compactStateTombstones, createState, diffJsonPatch, toJson } from "../src";
+import { compileJsonPatchToIntent } from "../src/internals";
 
 describe("performance regressions", () => {
   it("falls back to atomic replace for very large LCS matrices", () => {
@@ -64,6 +65,36 @@ describe("performance regressions", () => {
     expect(json.list[0]).toBe(-150);
     expect(json.list[1]).toBe(1);
     expect(json.list[199]).toBe(199);
+  });
+
+  it("avoids cloning the full base document when compiling sequential patches", () => {
+    const base: JsonValue = {
+      touched: { list: [1, 2, 3] },
+      untouched: {
+        huge: Array.from({ length: 2_000 }, (_, idx) => ({ idx, value: `v${idx}` })),
+      },
+    };
+    const patch: JsonPatchOp[] = [{ op: "replace", path: "/touched/list/0", value: 99 }];
+    const originalStructuredClone = globalThis.structuredClone;
+    const clonedInputs: unknown[] = [];
+
+    globalThis.structuredClone = ((value: unknown, options?: unknown) => {
+      clonedInputs.push(value);
+      return (originalStructuredClone as (input: unknown, cloneOptions?: unknown) => unknown)(
+        value,
+        options,
+      );
+    }) as typeof structuredClone;
+
+    try {
+      expect(compileJsonPatchToIntent(base, patch, { semantics: "sequential" })).toEqual([
+        { t: "ArrReplace", path: ["touched", "list"], index: 0, value: 99 },
+      ]);
+    } finally {
+      globalThis.structuredClone = originalStructuredClone;
+    }
+
+    expect(clonedInputs.includes(base)).toBe(false);
   });
 
   it("compacts high-volume stable tombstones without changing materialized output", () => {
