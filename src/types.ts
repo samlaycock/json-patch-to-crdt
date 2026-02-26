@@ -56,6 +56,8 @@ export type RgaElem = {
   prev: ElemId;
   /** Whether this element has been logically deleted. */
   tombstone: boolean;
+  /** Dot for the latest delete event that tombstoned this element (if retained). */
+  delDot?: Dot;
   /** The child CRDT node stored at this position. */
   value: Node;
   /** Dot used for deterministic ordering among concurrent inserts with the same predecessor. */
@@ -93,6 +95,7 @@ export type SerializedRgaElem = {
   id: ElemId;
   prev: ElemId;
   tombstone: boolean;
+  delDot?: Dot;
   value: SerializedNode;
   insDot: Dot;
 };

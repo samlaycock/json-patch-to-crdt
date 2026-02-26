@@ -604,6 +604,30 @@ describe("tombstone compaction", () => {
     expect(compacted.stats.sequenceTombstonesRemoved).toBe(0);
   });
 
+  it("does not compact sequence deletes before the delete event is causally stable", () => {
+    const origin = createState(["x"], { actor: "origin" });
+    const replicaA = forkState(origin, "A");
+    const replicaB = forkState(origin, "B");
+
+    const deletedOnA = applyPatch(replicaA, [{ op: "remove", path: "/0" }], {
+      semantics: "sequential",
+    });
+    expect(toJson(deletedOnA)).toEqual([]);
+
+    const compactedA = compactStateTombstones(deletedOnA, {
+      stable: {
+        origin: origin.clock.ctr,
+        A: replicaA.clock.ctr,
+      },
+    });
+
+    expect(toJson(compactedA.state)).toEqual([]);
+    expect(compactedA.stats.sequenceTombstonesRemoved).toBe(0);
+
+    const merged = mergeState(compactedA.state, replicaB, { actor: "A" });
+    expect(toJson(merged)).toEqual([]);
+  });
+
   it("supports in-place document compaction for server workflows", () => {
     const state = createState({ obj: { x: 1 } }, { actor: "A" });
     const removed = applyPatch(state, [{ op: "remove", path: "/obj/x" }]);

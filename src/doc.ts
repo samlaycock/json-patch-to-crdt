@@ -445,6 +445,7 @@ function cloneNodeAtDepth(node: Node, depth: number): Node {
       id: e.id,
       prev: e.prev,
       tombstone: e.tombstone,
+      delDot: e.delDot ? { actor: e.delDot.actor, ctr: e.delDot.ctr } : undefined,
       value: cloneNodeAtDepth(e.value, depth + 1),
       insDot: { actor: e.insDot.actor, ctr: e.insDot.ctr },
     });
@@ -776,7 +777,7 @@ function applyArrDelete(
     };
   }
 
-  rgaDelete(headSeq, baseId);
+  rgaDelete(headSeq, baseId, _d);
 
   return null;
 }
