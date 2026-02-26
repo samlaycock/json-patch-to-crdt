@@ -1,5 +1,23 @@
 # json-patch-to-crdt
 
+## 0.2.0
+
+### Minor Changes
+
+- b9b1785: Add `tryApplyPatchAsActor` to the internals API as a non-throwing counterpart to `applyPatchAsActor`, returning structured apply errors while preserving the existing throwing helper.
+
+### Patch Changes
+
+- 32bfcd6: Reduce `diffJsonPatch` object traversal allocation overhead by reusing a mutable path stack and replacing temporary key-membership `Set` allocations with sorted-key merge scans, while preserving deterministic patch ordering.
+- 16878c6: Add non-throwing `tryDeserializeDoc` and `tryDeserializeState` helpers that return structured failures (including typed deserialize and max-depth errors) instead of throwing during CRDT deserialization.
+- 267b31d: Improve `diffJsonPatch` array LCS scalability by trimming unchanged array prefixes/suffixes before applying the LCS matrix guardrail, allowing large arrays with small localized edits to produce index-level patches without allocating a full-size matrix.
+- 68eb543: Optimize sequential JSON Patch intent compilation to avoid cloning the entire base document up front by using copy-on-write shadow updates for touched paths only.
+- 99831f6: Optimize sequential patch application to avoid repeated full JSON materialization and recursive explicit-base shadow replays, including the `move` fast path, while preserving sequential semantics.
+- d9fd97f: Prevent external mutation of cached `rgaLinearizeIds` output by returning a copy of the cached linearized ID list.
+- 3ae0606: Reduce `materialize` traversal allocations by iterating object entries and RGA sequence elements with resumable cursors instead of snapshotting `Array.from(...)` entry lists and per-frame linearized ID arrays.
+- 076c7e9: Avoid full document materialization for JSON Patch `test` intents by resolving the CRDT path directly and only materializing the matched subtree when needed, reducing repeated `test` overhead on large documents with unrelated branches.
+- 1af3e6e: Reject cyclic RGA predecessor graphs during deserialization and throw a typed invariant error instead of silently dropping unreachable sequence elements.
+
 ## 0.1.3
 
 ### Patch Changes
