@@ -31,10 +31,7 @@ Node.js `>=18`.
 ```ts
 import { applyPatch, createState, toJson, type JsonPatchOp } from "json-patch-to-crdt";
 
-const state = createState(
-  { todos: ["write docs"], done: false },
-  { actor: "client-A" },
-);
+const state = createState({ todos: ["write docs"], done: false }, { actor: "client-A" });
 
 const patch: JsonPatchOp[] = [
   { op: "add", path: "/todos/-", value: "ship package" },
