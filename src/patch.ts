@@ -160,7 +160,7 @@ export function compileJsonPatchToIntent(
   options: CompilePatchOptions = {},
 ): IntentOp[] {
   const semantics = options.semantics ?? "sequential";
-  let workingBase: JsonValue = semantics === "sequential" ? structuredClone(baseJson) : baseJson;
+  let workingBase: JsonValue = baseJson;
   const pointerCache = new Map<string, string[]>();
   const intents: IntentOp[] = [];
 
@@ -170,7 +170,7 @@ export function compileJsonPatchToIntent(
     intents.push(...compileSingleOp(compileBase, op, opIndex, semantics, pointerCache));
 
     if (semantics === "sequential") {
-      workingBase = applyPatchOpToJsonInPlace(workingBase, op, opIndex, pointerCache);
+      workingBase = applyPatchOpToJsonWithStructuralSharing(workingBase, op, opIndex, pointerCache);
     }
   }
 
@@ -578,11 +578,10 @@ function applyPatchOpToJson(
   opIndex: number,
   pointerCache: Map<string, string[]>,
 ): JsonValue {
-  const doc = structuredClone(baseJson) as JsonValue;
-  return applyPatchOpToJsonInPlace(doc, op, opIndex, pointerCache);
+  return applyPatchOpToJsonWithStructuralSharing(baseJson, op, opIndex, pointerCache);
 }
 
-function applyPatchOpToJsonInPlace(
+function applyPatchOpToJsonWithStructuralSharing(
   doc: JsonValue,
   op: JsonPatchOp,
   opIndex: number,
@@ -597,9 +596,14 @@ function applyPatchOpToJsonInPlace(
     const value = structuredClone(lookupValueOrThrow(doc, fromPath, op.from, opIndex));
     const docAfterRemove =
       op.op === "move"
-        ? applyPatchOpToJsonInPlace(doc, { op: "remove", path: op.from }, opIndex, pointerCache)
+        ? applyPatchOpToJsonWithStructuralSharing(
+            doc,
+            { op: "remove", path: op.from },
+            opIndex,
+            pointerCache,
+          )
         : doc;
-    return applyPatchOpToJsonInPlace(
+    return applyPatchOpToJsonWithStructuralSharing(
       docAfterRemove,
       { op: "add", path: op.path, value },
       opIndex,
@@ -623,27 +627,30 @@ function applyPatchOpToJsonInPlace(
 
   const parentPath = path.slice(0, -1);
   const token = path[path.length - 1]!;
-  const parent =
+  const parentValue =
     parentPath.length === 0 ? doc : lookupValueOrThrow(doc, parentPath, op.path, opIndex);
 
-  if (Array.isArray(parent)) {
-    const index = parseArrayIndexToken(token, op.op, parent.length, op.path, opIndex);
+  if (Array.isArray(parentValue)) {
+    const index = parseArrayIndexToken(token, op.op, parentValue.length, op.path, opIndex);
+    const { root, parent } = cloneJsonPathToParent(doc, parentPath);
+    const clonedParent = parent as JsonValue[];
+
     if (op.op === "add") {
-      const insertAt = index === Number.POSITIVE_INFINITY ? parent.length : index;
-      parent.splice(insertAt, 0, structuredClone(op.value));
-      return doc;
+      const insertAt = index === Number.POSITIVE_INFINITY ? clonedParent.length : index;
+      clonedParent.splice(insertAt, 0, structuredClone(op.value));
+      return root;
     }
 
     if (op.op === "replace") {
-      parent[index] = structuredClone(op.value);
-      return doc;
+      clonedParent[index] = structuredClone(op.value);
+      return root;
     }
 
-    parent.splice(index, 1);
-    return doc;
+    clonedParent.splice(index, 1);
+    return root;
   }
 
-  if (!isPlainObject(parent)) {
+  if (!isPlainObject(parentValue)) {
     throw compileError(
       "INVALID_TARGET",
       `expected object or array parent at ${stringifyJsonPointer(parentPath)}`,
@@ -656,13 +663,60 @@ function applyPatchOpToJsonInPlace(
     throw compileError("INVALID_POINTER", `unsafe object key at ${op.path}`, op.path, opIndex);
   }
 
+  const { root, parent } = cloneJsonPathToParent(doc, parentPath);
+  const clonedParent = parent as Record<string, JsonValue>;
+
   if (op.op === "add" || op.op === "replace") {
-    parent[token] = structuredClone(op.value);
-    return doc;
+    clonedParent[token] = structuredClone(op.value);
+    return root;
   }
 
-  delete parent[token];
-  return doc;
+  delete clonedParent[token];
+  return root;
+}
+
+function cloneJsonContainerShallow(value: JsonValue): JsonValue[] | Record<string, JsonValue> {
+  if (Array.isArray(value)) {
+    return value.slice();
+  }
+
+  if (isPlainObject(value)) {
+    return { ...value };
+  }
+
+  throw new Error("Expected JSON container");
+}
+
+function cloneJsonPathToParent(
+  doc: JsonValue,
+  parentPath: string[],
+): { root: JsonValue; parent: JsonValue[] | Record<string, JsonValue> } {
+  const root = cloneJsonContainerShallow(doc);
+
+  if (parentPath.length === 0) {
+    return { root, parent: root };
+  }
+
+  let sourceCur: JsonValue = doc;
+  let targetCur: JsonValue[] | Record<string, JsonValue> = root;
+
+  for (const segment of parentPath) {
+    const nextSource = Array.isArray(sourceCur)
+      ? sourceCur[Number(segment)]!
+      : (sourceCur as Record<string, JsonValue>)[segment]!;
+    const nextTarget = cloneJsonContainerShallow(nextSource);
+
+    if (Array.isArray(targetCur)) {
+      targetCur[Number(segment)] = nextTarget;
+    } else {
+      targetCur[segment] = nextTarget;
+    }
+
+    sourceCur = nextSource;
+    targetCur = nextTarget;
+  }
+
+  return { root, parent: targetCur };
 }
 
 function parsePointerOrThrow(
