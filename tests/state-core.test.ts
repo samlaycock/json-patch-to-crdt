@@ -48,8 +48,10 @@ import {
   stringifyJsonPointer,
   rgaDelete,
   rgaInsertAfter,
+  rgaInsertAfterChecked,
   rgaLinearizeIds,
   rgaPrevForInsertAtIndex,
+  validateRgaSeq,
   serializeDoc,
   serializeState,
   deserializeDoc,
@@ -902,6 +904,107 @@ describe("RGA operations", () => {
     rgaInsertAfter(seq, "HEAD", id1, d1, newReg("a", d1));
     rgaInsertAfter(seq, "HEAD", id1, d1, newReg("b", d1));
     expect(rgaLinearizeIds(seq)).toEqual([id1]);
+  });
+
+  it("rejects checked insert when predecessor is missing", () => {
+    const seq = newSeq();
+    const d1 = dot("A", 1);
+    const id1 = dotToElemId(d1);
+
+    expect(() => rgaInsertAfterChecked(seq, "missing", id1, d1, newReg("a", d1))).toThrow(
+      "RGA predecessor 'missing' does not exist",
+    );
+    expect(rgaLinearizeIds(seq)).toEqual([]);
+  });
+
+  it("reports missing predecessors and orphaned elements", () => {
+    const seq = newSeq();
+    const d1 = dot("A", 1);
+    const d2 = dot("A", 2);
+    const id1 = dotToElemId(d1);
+    const id2 = dotToElemId(d2);
+
+    rgaInsertAfter(seq, "missing", id1, d1, newReg("a", d1));
+    rgaInsertAfter(seq, id1, id2, d2, newReg("b", d2));
+
+    expect(rgaLinearizeIds(seq)).toEqual([]);
+    expect(validateRgaSeq(seq)).toEqual({
+      ok: false,
+      issues: [
+        {
+          code: "MISSING_PREDECESSOR",
+          id: id1,
+          prev: "missing",
+          message: `RGA element '${id1}' references missing predecessor 'missing'`,
+        },
+        {
+          code: "ORPHANED_ELEMENT",
+          id: id1,
+          prev: "missing",
+          message: `RGA element '${id1}' is unreachable from HEAD`,
+        },
+        {
+          code: "ORPHANED_ELEMENT",
+          id: id2,
+          prev: id1,
+          message: `RGA element '${id2}' is unreachable from HEAD`,
+        },
+      ],
+    });
+  });
+
+  it("reports predecessor cycles and orphaned cycle elements", () => {
+    const seq = newSeq();
+    const d1 = dot("A", 1);
+    const d2 = dot("A", 2);
+    const id1 = dotToElemId(d1);
+    const id2 = dotToElemId(d2);
+
+    seq.elems.set(id1, {
+      id: id1,
+      prev: id2,
+      tombstone: false,
+      value: newReg("a", d1),
+      insDot: d1,
+    });
+    seq.elems.set(id2, {
+      id: id2,
+      prev: id1,
+      tombstone: false,
+      value: newReg("b", d2),
+      insDot: d2,
+    });
+
+    expect(rgaLinearizeIds(seq)).toEqual([]);
+    expect(validateRgaSeq(seq)).toEqual({
+      ok: false,
+      issues: [
+        {
+          code: "PREDECESSOR_CYCLE",
+          id: id1,
+          prev: id2,
+          message: `RGA predecessor cycle detected at '${id1}'`,
+        },
+        {
+          code: "ORPHANED_ELEMENT",
+          id: id1,
+          prev: id2,
+          message: `RGA element '${id1}' is unreachable from HEAD`,
+        },
+        {
+          code: "PREDECESSOR_CYCLE",
+          id: id2,
+          prev: id1,
+          message: `RGA predecessor cycle detected at '${id2}'`,
+        },
+        {
+          code: "ORPHANED_ELEMENT",
+          id: id2,
+          prev: id1,
+          message: `RGA element '${id2}' is unreachable from HEAD`,
+        },
+      ],
+    });
   });
 
   it("ignores delete of unknown id", () => {

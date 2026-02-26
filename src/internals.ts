@@ -98,9 +98,13 @@ export { newObj, newSeq, newReg, lwwSet, objSet, objRemove, objCompactTombstones
 export {
   HEAD,
   rgaInsertAfter,
+  rgaInsertAfterChecked,
   rgaDelete,
   rgaCompactTombstones,
   rgaLinearizeIds,
   rgaPrevForInsertAtIndex,
   rgaIdAtIndex,
+  validateRgaSeq,
 } from "./rga";
+
+export type { RgaValidationIssue, RgaValidationResult } from "./rga";

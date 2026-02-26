@@ -38,6 +38,30 @@ type RgaLinearCursor = {
   next: () => RgaElem | undefined;
 };
 
+export type RgaValidationIssue =
+  | {
+      code: "MISSING_PREDECESSOR";
+      id: ElemId;
+      prev: ElemId;
+      message: string;
+    }
+  | {
+      code: "PREDECESSOR_CYCLE";
+      id: ElemId;
+      prev: ElemId;
+      message: string;
+    }
+  | {
+      code: "ORPHANED_ELEMENT";
+      id: ElemId;
+      prev: ElemId;
+      message: string;
+    };
+
+export type RgaValidationResult =
+  | { ok: true; issues: [] }
+  | { ok: false; issues: RgaValidationIssue[] };
+
 export function rgaCreateLinearCursor(seq: RgaSeq): RgaLinearCursor {
   const idx = rgaChildrenIndex(seq);
   const stack: Array<{ children: RgaElem[]; index: number }> = [];
@@ -103,6 +127,24 @@ export function rgaInsertAfter(
   bumpVersion(seq);
 }
 
+export function rgaInsertAfterChecked(
+  seq: RgaSeq,
+  prev: ElemId,
+  id: ElemId,
+  insDot: Dot,
+  value: Node,
+): void {
+  if (seq.elems.has(id)) {
+    return; // preserve idempotent insert semantics
+  }
+
+  if (prev !== HEAD && !seq.elems.has(prev)) {
+    throw new Error(`RGA predecessor '${prev}' does not exist`);
+  }
+
+  rgaInsertAfter(seq, prev, id, insDot, value);
+}
+
 export function rgaDelete(seq: RgaSeq, id: ElemId, delDot?: Dot): void {
   const e = seq.elems.get(id);
   if (!e) {
@@ -122,6 +164,125 @@ export function rgaDelete(seq: RgaSeq, id: ElemId, delDot?: Dot): void {
     e.delDot = { actor: delDot.actor, ctr: delDot.ctr };
   }
   bumpVersion(seq);
+}
+
+export function validateRgaSeq(seq: RgaSeq): RgaValidationResult {
+  const issues: RgaValidationIssue[] = [];
+
+  for (const elem of seq.elems.values()) {
+    if (elem.prev !== HEAD && !seq.elems.has(elem.prev)) {
+      issues.push({
+        code: "MISSING_PREDECESSOR",
+        id: elem.id,
+        prev: elem.prev,
+        message: `RGA element '${elem.id}' references missing predecessor '${elem.prev}'`,
+      });
+    }
+  }
+
+  const cycleIds = new Set<ElemId>();
+  const visitState = new Map<ElemId, 1 | 2>();
+  const sortedIds = [...seq.elems.keys()].sort();
+
+  for (const startId of sortedIds) {
+    if (visitState.get(startId) === 2) {
+      continue;
+    }
+
+    const trail: ElemId[] = [];
+    const trailIndex = new Map<ElemId, number>();
+    let currentId: ElemId | undefined = startId;
+
+    while (currentId !== undefined) {
+      const seenAt = trailIndex.get(currentId);
+      if (seenAt !== undefined) {
+        for (let i = seenAt; i < trail.length; i++) {
+          cycleIds.add(trail[i]!);
+        }
+        break;
+      }
+
+      if (visitState.get(currentId) === 2) {
+        break;
+      }
+
+      const elem = seq.elems.get(currentId);
+      if (!elem) {
+        break;
+      }
+
+      trailIndex.set(currentId, trail.length);
+      trail.push(currentId);
+
+      if (elem.prev === HEAD) {
+        break;
+      }
+
+      currentId = elem.prev;
+    }
+
+    for (const id of trail) {
+      visitState.set(id, 2);
+    }
+  }
+
+  for (const id of [...cycleIds].sort()) {
+    const elem = seq.elems.get(id)!;
+    issues.push({
+      code: "PREDECESSOR_CYCLE",
+      id,
+      prev: elem.prev,
+      message: `RGA predecessor cycle detected at '${id}'`,
+    });
+  }
+
+  const children = rgaChildrenIndex(seq);
+  const reachable = new Set<ElemId>();
+  const stack = [...(children.get(HEAD) ?? [])];
+
+  while (stack.length > 0) {
+    const elem = stack.pop()!;
+    if (reachable.has(elem.id)) {
+      continue;
+    }
+
+    reachable.add(elem.id);
+    const descendants = children.get(elem.id);
+    if (descendants) {
+      stack.push(...descendants);
+    }
+  }
+
+  for (const id of sortedIds) {
+    if (reachable.has(id)) {
+      continue;
+    }
+
+    const elem = seq.elems.get(id)!;
+    issues.push({
+      code: "ORPHANED_ELEMENT",
+      id,
+      prev: elem.prev,
+      message: `RGA element '${id}' is unreachable from HEAD`,
+    });
+  }
+
+  if (issues.length === 0) {
+    return { ok: true, issues: [] };
+  }
+
+  const issueOrder: Record<RgaValidationIssue["code"], number> = {
+    MISSING_PREDECESSOR: 0,
+    PREDECESSOR_CYCLE: 1,
+    ORPHANED_ELEMENT: 2,
+  };
+  issues.sort(
+    (a, b) =>
+      a.id.localeCompare(b.id) ||
+      issueOrder[a.code] - issueOrder[b.code] ||
+      a.prev.localeCompare(b.prev),
+  );
+  return { ok: false, issues };
 }
 
 /**
