@@ -6,10 +6,21 @@ import { applyPatch, compactStateTombstones, createState, diffJsonPatch, toJson 
 import { compileJsonPatchToIntent } from "../src/internals";
 
 describe("performance regressions", () => {
-  it("falls back to atomic replace for very large LCS matrices", () => {
+  it("diffs large arrays with a narrow changed window without full-array replace", () => {
     const baseArr = Array.from({ length: 1_500 }, (_, idx) => idx);
     const nextArr = [...baseArr];
     nextArr[750] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const patch = diffJsonPatch(base, next);
+
+    expect(patch).toEqual([{ op: "replace", path: "/arr/750", value: -1 }]);
+  });
+
+  it("still falls back to atomic replace when the unmatched LCS window is too large", () => {
+    const baseArr = Array.from({ length: 600 }, (_, idx) => idx);
+    const nextArr = [...baseArr].reverse();
 
     const base: JsonValue = { arr: baseArr };
     const next: JsonValue = { arr: nextArr };

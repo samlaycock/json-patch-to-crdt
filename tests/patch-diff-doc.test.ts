@@ -346,10 +346,21 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "/arr/1", value: 3 }]);
   });
 
-  it("falls back to atomic array replacement for large arrays by default", () => {
+  it("trims unchanged prefixes/suffixes before applying the LCS guardrail", () => {
     const baseArr = Array.from({ length: 600 }, (_, idx) => idx);
     const nextArr = [...baseArr];
     nextArr[300] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next);
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr/300", value: -1 }]);
+  });
+
+  it("falls back to atomic array replacement when the unmatched window exceeds the guardrail", () => {
+    const baseArr = Array.from({ length: 600 }, (_, idx) => idx);
+    const nextArr = [...baseArr].reverse();
 
     const base: JsonValue = { arr: baseArr };
     const next: JsonValue = { arr: nextArr };

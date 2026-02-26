@@ -214,12 +214,9 @@ function diffValue(
     const arrayStrategy = options.arrayStrategy ?? "lcs";
 
     if (arrayStrategy === "lcs" && Array.isArray(base) && Array.isArray(next)) {
-      if (!shouldUseLcsDiff(base.length, next.length, options.lcsMaxCells)) {
+      if (!diffArray(path, base, next, ops, options.lcsMaxCells)) {
         ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
-        return;
       }
-
-      diffArray(path, base, next, ops);
       return;
     }
 
@@ -261,14 +258,48 @@ function diffValue(
   }
 }
 
-function diffArray(path: string[], base: JsonValue[], next: JsonValue[], ops: JsonPatchOp[]): void {
-  const n = base.length;
-  const m = next.length;
+function diffArray(
+  path: string[],
+  base: JsonValue[],
+  next: JsonValue[],
+  ops: JsonPatchOp[],
+  lcsMaxCells?: number,
+): boolean {
+  const baseLength = base.length;
+  const nextLength = next.length;
+  let prefix = 0;
+
+  while (prefix < baseLength && prefix < nextLength && jsonEquals(base[prefix]!, next[prefix]!)) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < baseLength - prefix &&
+    suffix < nextLength - prefix &&
+    jsonEquals(base[baseLength - 1 - suffix]!, next[nextLength - 1 - suffix]!)
+  ) {
+    suffix += 1;
+  }
+
+  const baseStart = prefix;
+  const nextStart = prefix;
+  const n = baseLength - prefix - suffix;
+  const m = nextLength - prefix - suffix;
+
+  if (!shouldUseLcsDiff(n, m, lcsMaxCells)) {
+    return false;
+  }
+
+  if (n === 0 && m === 0) {
+    return true;
+  }
+
   const lcs: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
 
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
-      if (jsonEquals(base[i]!, next[j]!)) {
+      if (jsonEquals(base[baseStart + i]!, next[nextStart + j]!)) {
         lcs[i]![j] = 1 + lcs[i + 1]![j + 1]!;
       } else {
         lcs[i]![j] = Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
@@ -279,10 +310,10 @@ function diffArray(path: string[], base: JsonValue[], next: JsonValue[], ops: Js
   const localOps: JsonPatchOp[] = [];
   let i = 0;
   let j = 0;
-  let index = 0;
+  let index = prefix;
 
   while (i < n || j < m) {
-    if (i < n && j < m && jsonEquals(base[i]!, next[j]!)) {
+    if (i < n && j < m && jsonEquals(base[baseStart + i]!, next[nextStart + j]!)) {
       i += 1;
       j += 1;
       index += 1;
@@ -296,7 +327,7 @@ function diffArray(path: string[], base: JsonValue[], next: JsonValue[], ops: Js
       localOps.push({
         op: "add",
         path: stringifyJsonPointer([...path, String(index)]),
-        value: next[j]!,
+        value: next[nextStart + j]!,
       });
       j += 1;
       index += 1;
@@ -314,6 +345,7 @@ function diffArray(path: string[], base: JsonValue[], next: JsonValue[], ops: Js
   }
 
   ops.push(...compactArrayOps(localOps));
+  return true;
 }
 
 function shouldUseLcsDiff(baseLength: number, nextLength: number, lcsMaxCells?: number): boolean {
