@@ -137,6 +137,44 @@ describe("performance regressions", () => {
     expect(json.list).toEqual(expected.list);
     expect(json.meta).toBe(1);
   });
+
+  it("handles many test ops without materializing unrelated large branches", () => {
+    const base = createState(
+      {
+        meta: { version: 0 },
+        list: Array.from({ length: 200 }, (_, idx) => idx),
+        untouched: {
+          huge: Array.from({ length: 2_500 }, (_, idx) => ({
+            idx,
+            nested: { label: `v${idx}`, even: idx % 2 === 0 },
+          })),
+        },
+      },
+      { actor: "perf" },
+    );
+
+    const patch: JsonPatchOp[] = [];
+    for (let i = 0; i < 200; i++) {
+      patch.push({ op: "test", path: "/meta/version", value: 0 });
+      patch.push({ op: "replace", path: `/list/${i}`, value: i + 10_000 });
+    }
+
+    const next = applyPatch(base, patch, { semantics: "sequential", testAgainst: "base" });
+    const json = toJson(next) as {
+      meta: { version: number };
+      list: number[];
+      untouched: { huge: Array<{ idx: number; nested: { label: string; even: boolean } }> };
+    };
+
+    expect(json.meta.version).toBe(0);
+    expect(json.list[0]).toBe(10_000);
+    expect(json.list[199]).toBe(10_199);
+    expect(json.untouched.huge[2_499]).toEqual({
+      idx: 2_499,
+      nested: { label: "v2499", even: false },
+    });
+  });
+
   it("compacts high-volume stable tombstones without changing materialized output", () => {
     const initial: Record<string, JsonValue> = {};
     for (let i = 0; i < 400; i++) {
