@@ -312,31 +312,28 @@ function applyPatchInternal(
           clock: createClock("__base__", 0),
         }
       : null;
+    let sequentialHeadJson = materialize(state.doc.root);
+    let sequentialBaseJson = explicitBaseState
+      ? materialize(explicitBaseState.doc.root)
+      : sequentialHeadJson;
 
     for (const [opIndex, op] of patch.entries()) {
       const baseDoc = explicitBaseState ? explicitBaseState.doc : state.doc;
-      const step = applyPatchOpSequential(state, op, options, baseDoc, opIndex);
+      const step = applyPatchOpSequential(
+        state,
+        op,
+        options,
+        baseDoc,
+        sequentialBaseJson,
+        sequentialHeadJson,
+        explicitBaseState,
+        opIndex,
+      );
       if (!step.ok) {
         return step;
       }
-
-      if (explicitBaseState && op.op !== "test") {
-        // Replay non-test ops into the explicit-base shadow so the next sequential op
-        // resolves paths against the same evolving snapshot the compiler expects.
-        const baseStep = applyPatchInternal(
-          explicitBaseState,
-          [op],
-          {
-            semantics: "sequential",
-            testAgainst: "base",
-            strictParents: options.strictParents,
-          },
-          "step",
-        );
-        if (!baseStep.ok) {
-          return baseStep;
-        }
-      }
+      sequentialBaseJson = step.baseJson;
+      sequentialHeadJson = step.headJson;
     }
 
     return { ok: true };
@@ -365,45 +362,77 @@ function applyPatchOpSequential(
   op: JsonPatchOp,
   options: ApplyPatchOptions,
   baseDoc: Doc,
+  baseJson: JsonValue,
+  headJson: JsonValue,
+  explicitBaseState: CrdtState | null,
   opIndex: number,
-): ApplyResult {
-  const baseJson = materialize(baseDoc.root);
-
+): ApplyPatchOpSequentialResult {
   if (op.op === "move") {
     const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex);
     if (!fromResolved.ok) {
       return fromResolved;
     }
 
-    const fromValue = fromResolved.value;
-    const removeRes = applySinglePatchOp(
+    const fromValue = structuredClone(fromResolved.value);
+    const removeRes = applySinglePatchOpSequentialStep(
       state,
       baseDoc,
       baseJson,
-      {
-        op: "remove",
-        path: op.from,
-      },
+      headJson,
+      { op: "remove", path: op.from },
       options,
+      explicitBaseState,
     );
     if (!removeRes.ok) {
       return removeRes;
     }
 
-    // `move` resolves `path` after removal; compile/add against the post-remove head.
-    const addBase = state.doc;
-    const addBaseJson = materialize(addBase.root);
-    return applySinglePatchOp(
+    // `move` resolves `path` after removal; compile/add against the post-remove shadow.
+    const addOp: JsonPatchOp = {
+      op: "add",
+      path: op.path,
+      value: fromValue,
+    };
+    if (!explicitBaseState) {
+      return applySinglePatchOpSequentialStep(
+        state,
+        state.doc,
+        removeRes.baseJson,
+        removeRes.headJson,
+        addOp,
+        options,
+        null,
+      );
+    }
+
+    const headAddRes = applySinglePatchOpSequentialStep(
       state,
-      addBase,
-      addBaseJson,
-      {
-        op: "add",
-        path: op.path,
-        value: fromValue,
-      },
+      state.doc,
+      removeRes.headJson,
+      removeRes.headJson,
+      addOp,
+      options,
+      null,
+    );
+    if (!headAddRes.ok) {
+      return headAddRes;
+    }
+
+    const shadowAddRes = applySinglePatchOpExplicitShadowStep(
+      explicitBaseState,
+      removeRes.baseJson,
+      addOp,
       options,
     );
+    if (!shadowAddRes.ok) {
+      return shadowAddRes;
+    }
+
+    return {
+      ok: true,
+      baseJson: shadowAddRes.baseJson,
+      headJson: headAddRes.headJson,
+    };
   }
 
   if (op.op === "copy") {
@@ -412,21 +441,180 @@ function applyPatchOpSequential(
       return fromResolved;
     }
 
-    const fromValue = fromResolved.value;
-    return applySinglePatchOp(
+    return applySinglePatchOpSequentialStep(
       state,
       baseDoc,
       baseJson,
+      headJson,
       {
         op: "add",
         path: op.path,
-        value: fromValue,
+        value: structuredClone(fromResolved.value),
       },
       options,
+      explicitBaseState,
     );
   }
 
-  return applySinglePatchOp(state, baseDoc, baseJson, op, options);
+  return applySinglePatchOpSequentialStep(
+    state,
+    baseDoc,
+    baseJson,
+    headJson,
+    op,
+    options,
+    explicitBaseState,
+  );
+}
+
+type ApplyPatchOpSequentialResult =
+  | { ok: true; baseJson: JsonValue; headJson: JsonValue }
+  | ApplyError;
+
+function applySinglePatchOpSequentialStep(
+  state: CrdtState,
+  baseDoc: Doc,
+  baseJson: JsonValue,
+  headJson: JsonValue,
+  op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
+  options: ApplyPatchOptions,
+  explicitBaseState: CrdtState | null,
+): ApplyPatchOpSequentialResult {
+  const compiled = compileIntents(baseJson, [op], "sequential", options.jsonValidation ?? "none");
+  if (!compiled.ok) {
+    return compiled;
+  }
+
+  const headStep = applyIntentsToCrdt(
+    baseDoc,
+    state.doc,
+    compiled.intents,
+    () => state.clock.next(),
+    options.testAgainst ?? "head",
+    (ctr) => bumpClockCounter(state, ctr),
+    { strictParents: options.strictParents },
+  );
+  if (!headStep.ok) {
+    return headStep;
+  }
+
+  if (explicitBaseState && op.op !== "test") {
+    const shadowStep = applyIntentsToCrdt(
+      explicitBaseState.doc,
+      explicitBaseState.doc,
+      compiled.intents,
+      () => explicitBaseState.clock.next(),
+      "base",
+      (ctr) => bumpClockCounter(explicitBaseState, ctr),
+      { strictParents: options.strictParents },
+    );
+    if (!shadowStep.ok) {
+      return shadowStep;
+    }
+  }
+
+  if (op.op === "test") {
+    return { ok: true, baseJson, headJson };
+  }
+
+  const nextBaseJson = applyJsonPatchOpToShadow(baseJson, op);
+  const nextHeadJson = explicitBaseState ? applyJsonPatchOpToShadow(headJson, op) : nextBaseJson;
+  return {
+    ok: true,
+    baseJson: nextBaseJson,
+    headJson: nextHeadJson,
+  };
+}
+
+function applySinglePatchOpExplicitShadowStep(
+  explicitBaseState: CrdtState,
+  baseJson: JsonValue,
+  op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
+  options: ApplyPatchOptions,
+): { ok: true; baseJson: JsonValue } | ApplyError {
+  const compiled = compileIntents(baseJson, [op], "sequential", options.jsonValidation ?? "none");
+  if (!compiled.ok) {
+    return compiled;
+  }
+
+  const shadowStep = applyIntentsToCrdt(
+    explicitBaseState.doc,
+    explicitBaseState.doc,
+    compiled.intents,
+    () => explicitBaseState.clock.next(),
+    "base",
+    (ctr) => bumpClockCounter(explicitBaseState, ctr),
+    { strictParents: options.strictParents },
+  );
+  if (!shadowStep.ok) {
+    return shadowStep;
+  }
+
+  if (op.op === "test") {
+    return { ok: true, baseJson };
+  }
+
+  return { ok: true, baseJson: applyJsonPatchOpToShadow(baseJson, op) };
+}
+
+function applyJsonPatchOpToShadow(
+  baseJson: JsonValue,
+  op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
+): JsonValue {
+  const path = parseJsonPointer(op.path);
+
+  if (path.length === 0) {
+    if (op.op === "test") {
+      return baseJson;
+    }
+
+    if (op.op === "remove") {
+      return null;
+    }
+
+    return structuredClone(op.value);
+  }
+
+  const parentPath = path.slice(0, -1);
+  const key = path[path.length - 1]!;
+  const parent = getAtJson(baseJson, parentPath);
+
+  if (Array.isArray(parent)) {
+    const idx = key === "-" ? parent.length : Number(key);
+    if (!Number.isInteger(idx)) {
+      throw new Error(`Invalid array index ${key}`);
+    }
+
+    if (op.op === "add") {
+      parent.splice(idx, 0, structuredClone(op.value));
+      return baseJson;
+    }
+
+    if (op.op === "remove") {
+      parent.splice(idx, 1);
+      return baseJson;
+    }
+
+    if (op.op === "replace") {
+      parent[idx] = structuredClone(op.value);
+      return baseJson;
+    }
+
+    return baseJson;
+  }
+
+  const obj = parent as Record<string, JsonValue>;
+  if (op.op === "add" || op.op === "replace") {
+    obj[key] = structuredClone(op.value);
+    return baseJson;
+  }
+
+  if (op.op === "remove") {
+    delete obj[key];
+    return baseJson;
+  }
+
+  return baseJson;
 }
 
 function resolveValueAtPointer(
@@ -449,29 +637,6 @@ function resolveValueAtPointer(
   } catch (error) {
     return toPointerLookupApplyError(error, pointer, opIndex);
   }
-}
-
-function applySinglePatchOp(
-  state: CrdtState,
-  baseDoc: Doc,
-  baseJson: JsonValue,
-  op: JsonPatchOp,
-  options: ApplyPatchOptions,
-): ApplyResult {
-  const compiled = compileIntents(baseJson, [op], "sequential", options.jsonValidation ?? "none");
-  if (!compiled.ok) {
-    return compiled;
-  }
-
-  return applyIntentsToCrdt(
-    baseDoc,
-    state.doc,
-    compiled.intents,
-    () => state.clock.next(),
-    options.testAgainst ?? "head",
-    (ctr) => bumpClockCounter(state, ctr),
-    { strictParents: options.strictParents },
-  );
 }
 
 function bumpClockCounter(state: CrdtState, ctr: number): void {
