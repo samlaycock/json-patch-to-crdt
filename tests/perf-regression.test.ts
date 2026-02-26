@@ -276,4 +276,37 @@ describe("performance regressions", () => {
 
     expect(valuesCalls).toBeLessThanOrEqual(3);
   });
+
+  it("reuses indexed base lookups across evolving delete batches", () => {
+    let ctr = 0;
+    const nextDot = () => ({ actor: "perf", ctr: ++ctr });
+    const doc = docFromJson({ list: Array.from({ length: 200 }, (_, idx) => idx) }, nextDot);
+    const listEntry = doc.root.kind === "obj" ? doc.root.entries.get("list") : undefined;
+    expect(listEntry?.node.kind).toBe("seq");
+
+    const seq = listEntry!.node as RgaSeq;
+    const elems = seq.elems as Map<string, RgaElem> & { values: typeof seq.elems.values };
+    const originalValues = elems.values;
+    let valuesCalls = 0;
+
+    elems.values = function values(this: Map<string, RgaElem>) {
+      valuesCalls += 1;
+      return originalValues.call(this);
+    };
+
+    try {
+      const intents: IntentOp[] = Array.from({ length: 120 }, () => ({
+        t: "ArrDelete",
+        path: ["list"],
+        index: 0,
+      }));
+
+      const result = applyIntentsToCrdt(doc, doc, intents, nextDot, "base");
+      expect(result.ok).toBe(true);
+    } finally {
+      elems.values = originalValues;
+    }
+
+    expect(valuesCalls).toBeLessThanOrEqual(2);
+  });
 });

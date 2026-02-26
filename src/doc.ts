@@ -30,10 +30,10 @@ import {
 } from "./patch";
 import {
   HEAD,
+  rgaCreateIndexedIdSnapshot,
   rgaDelete,
   rgaIdAtIndex,
   rgaInsertAfter,
-  rgaLinearizeIds,
   rgaMaxInsertDotForPrev,
   rgaPrevForInsertAtIndex,
 } from "./rga";
@@ -607,11 +607,33 @@ function applyObjRemove(
   return null;
 }
 
+type ArrayIndexLookupSession = {
+  get: (seq: RgaSeq) => ReturnType<typeof rgaCreateIndexedIdSnapshot>;
+};
+
+function createArrayIndexLookupSession(): ArrayIndexLookupSession {
+  const bySeq = new WeakMap<RgaSeq, ReturnType<typeof rgaCreateIndexedIdSnapshot>>();
+
+  return {
+    get(seq) {
+      const cached = bySeq.get(seq);
+      if (cached) {
+        return cached;
+      }
+
+      const created = rgaCreateIndexedIdSnapshot(seq);
+      bySeq.set(seq, created);
+      return created;
+    },
+  };
+}
+
 function applyArrInsert(
   base: Doc,
   head: Doc,
   it: Extract<IntentOp, { t: "ArrInsert" }>,
   newDot: () => Dot,
+  indexSession: ArrayIndexLookupSession,
   bumpCounterAbove?: (ctr: number) => void,
   strictParents = false,
 ): ApplyResult | null {
@@ -659,8 +681,9 @@ function applyArrInsert(
     return headSeqRes;
   }
   const headSeq = headSeqRes.seq;
-  const idx = it.index === Number.POSITIVE_INFINITY ? rgaLinearizeIds(baseSeq).length : it.index;
-  const baseLen = rgaLinearizeIds(baseSeq).length;
+  const baseIndex = indexSession.get(baseSeq);
+  const baseLen = baseIndex.length();
+  const idx = it.index === Number.POSITIVE_INFINITY ? baseLen : it.index;
 
   if (idx < 0 || idx > baseLen) {
     return {
@@ -672,7 +695,7 @@ function applyArrInsert(
     };
   }
 
-  const prev = idx === 0 ? HEAD : (rgaIdAtIndex(baseSeq, idx - 1) ?? HEAD);
+  const prev = baseIndex.prevForInsertAt(idx);
   const dotRes = nextInsertDotForPrev(headSeq, prev, newDot, pointer, bumpCounterAbove);
   if (!dotRes.ok) {
     return dotRes;
@@ -681,6 +704,9 @@ function applyArrInsert(
   const d = dotRes.dot;
   const id = dotToElemId(d);
   rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot));
+  if (baseSeq === headSeq) {
+    baseIndex.insertAt(idx, id);
+  }
 
   return null;
 }
@@ -727,6 +753,7 @@ function applyArrDelete(
   head: Doc,
   it: Extract<IntentOp, { t: "ArrDelete" }>,
   newDot: () => Dot,
+  indexSession: ArrayIndexLookupSession,
 ): ApplyResult | null {
   const _d = newDot();
   const baseSeq = getSeqAtPath(base, it.path);
@@ -746,7 +773,8 @@ function applyArrDelete(
     return headSeqRes;
   }
   const headSeq = headSeqRes.seq;
-  const baseId = rgaIdAtIndex(baseSeq, it.index);
+  const baseIndex = indexSession.get(baseSeq);
+  const baseId = baseIndex.idAt(it.index);
 
   if (!baseId) {
     return {
@@ -770,6 +798,9 @@ function applyArrDelete(
   }
 
   rgaDelete(headSeq, baseId, _d);
+  if (baseSeq === headSeq) {
+    baseIndex.deleteAt(it.index);
+  }
 
   return null;
 }
@@ -779,6 +810,7 @@ function applyArrReplace(
   head: Doc,
   it: Extract<IntentOp, { t: "ArrReplace" }>,
   newDot: () => Dot,
+  indexSession: ArrayIndexLookupSession,
 ): ApplyResult | null {
   const _d = newDot();
   const baseSeq = getSeqAtPath(base, it.path);
@@ -798,7 +830,8 @@ function applyArrReplace(
     return headSeqRes;
   }
   const headSeq = headSeqRes.seq;
-  const baseId = rgaIdAtIndex(baseSeq, it.index);
+  const baseIndex = indexSession.get(baseSeq);
+  const baseId = baseIndex.idAt(it.index);
 
   if (!baseId) {
     return {
@@ -851,6 +884,8 @@ export function applyIntentsToCrdt(
   bumpCounterAbove?: (ctr: number) => void,
   options: { strictParents?: boolean } = {},
 ): ApplyResult {
+  const arrayIndexSession = createArrayIndexLookupSession();
+
   for (const it of intents) {
     let fail: ApplyResult | null = null;
 
@@ -870,15 +905,16 @@ export function applyIntentsToCrdt(
           head,
           it,
           newDot,
+          arrayIndexSession,
           bumpCounterAbove,
           options.strictParents ?? false,
         );
         break;
       case "ArrDelete":
-        fail = applyArrDelete(base, head, it, newDot);
+        fail = applyArrDelete(base, head, it, newDot, arrayIndexSession);
         break;
       case "ArrReplace":
-        fail = applyArrReplace(base, head, it, newDot);
+        fail = applyArrReplace(base, head, it, newDot, arrayIndexSession);
         break;
       default:
         assertNever(it, "Unhandled intent type");
