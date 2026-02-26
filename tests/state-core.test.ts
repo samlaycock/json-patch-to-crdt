@@ -1070,7 +1070,7 @@ describe("serialization", () => {
     const id2 = dotToElemId(d2);
     rgaInsertAfter(seq, "HEAD", id1, d1, newReg("a", d1));
     rgaInsertAfter(seq, id1, id2, d2, newReg("b", d2));
-    rgaDelete(seq, id1);
+    rgaDelete(seq, id1, d3);
 
     const obj = newObj();
     objSet(obj, "keep", newReg("x", d1), d1);
@@ -1083,10 +1083,21 @@ describe("serialization", () => {
     const restored = deserializeDoc(payload);
 
     expect(materialize(restored.root)).toEqual({ keep: "x", arr: ["b"] });
+    if (payload.root.kind === "obj") {
+      const serializedSeq = payload.root.entries.arr?.node;
+      if (serializedSeq?.kind === "seq") {
+        expect(serializedSeq.elems[id1]?.delDot).toEqual(d3);
+      } else {
+        throw new Error("Expected serialized seq");
+      }
+    } else {
+      throw new Error("Expected serialized obj");
+    }
     if (restored.root.kind === "obj") {
       const restoredSeq = restored.root.entries.get("arr")?.node;
       if (restoredSeq && restoredSeq.kind === "seq") {
         expect(rgaLinearizeIds(restoredSeq)).toEqual([id2]);
+        expect(restoredSeq.elems.get(id1)?.delDot).toEqual(d3);
       } else {
         throw new Error("Expected restored seq");
       }

@@ -377,6 +377,7 @@ function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number, path: string[]): RgaSeq {
         id,
         prev: ea.prev,
         tombstone: ea.tombstone || eb.tombstone,
+        delDot: mergeDeleteDot(ea.delDot, eb.delDot),
         value: mergedValue,
         insDot: { ...ea.insDot },
       });
@@ -408,9 +409,26 @@ function cloneElem(e: RgaElem, depth: number): RgaElem {
     id: e.id,
     prev: e.prev,
     tombstone: e.tombstone,
+    delDot: e.delDot ? { ...e.delDot } : undefined,
     value: cloneNodeShallow(e.value, depth + 1),
     insDot: { ...e.insDot },
   };
+}
+
+function mergeDeleteDot(a?: Dot, b?: Dot): Dot | undefined {
+  if (a && b) {
+    return compareDot(a, b) >= 0 ? { ...a } : { ...b };
+  }
+
+  if (a) {
+    return { ...a };
+  }
+
+  if (b) {
+    return { ...b };
+  }
+
+  return undefined;
 }
 
 function cloneNodeShallow(node: Node, depth: number): Node {

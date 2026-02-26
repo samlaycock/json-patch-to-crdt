@@ -151,13 +151,18 @@ function serializeNode(node: Doc["root"]): SerializedNode {
 
   const elems = createSerializedRecord<SerializedRgaElem>();
   for (const [id, e] of node.elems.entries()) {
-    setSerializedRecordValue(elems, id, {
+    const serializedElem: SerializedRgaElem = {
       id: e.id,
       prev: e.prev,
       tombstone: e.tombstone,
       value: serializeNode(e.value),
       insDot: { actor: e.insDot.actor, ctr: e.insDot.ctr },
-    });
+    };
+    if (e.delDot) {
+      serializedElem.delDot = { actor: e.delDot.actor, ctr: e.delDot.ctr };
+    }
+
+    setSerializedRecordValue(elems, id, serializedElem);
   }
 
   return { kind: "seq", elems };
@@ -227,6 +232,10 @@ function deserializeNode(node: unknown, path: string, depth: number): Node {
     const tombstone = readBoolean(elem.tombstone, `${elemPath}/tombstone`);
     const value = deserializeNode(elem.value, `${elemPath}/value`, depth + 1);
     const insDot = readDot(elem.insDot, `${elemPath}/insDot`);
+    const delDot =
+      "delDot" in elem && elem.delDot !== undefined
+        ? readDot(elem.delDot, `${elemPath}/delDot`)
+        : undefined;
     if (dotToElemId(insDot) !== id) {
       fail(
         "INVALID_SERIALIZED_INVARIANT",
@@ -234,11 +243,19 @@ function deserializeNode(node: unknown, path: string, depth: number): Node {
         "sequence element id must match its insertion dot",
       );
     }
+    if (!tombstone && delDot) {
+      fail(
+        "INVALID_SERIALIZED_INVARIANT",
+        `${elemPath}/delDot`,
+        "live sequence elements must not include delete metadata",
+      );
+    }
 
     elems.set(id, {
       id,
       prev,
       tombstone,
+      delDot,
       value,
       insDot,
     });

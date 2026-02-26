@@ -103,17 +103,24 @@ export function rgaInsertAfter(
   bumpVersion(seq);
 }
 
-export function rgaDelete(seq: RgaSeq, id: ElemId): void {
+export function rgaDelete(seq: RgaSeq, id: ElemId, delDot?: Dot): void {
   const e = seq.elems.get(id);
   if (!e) {
     return; // delete unseen => can store tombstone separately if you want
   }
 
   if (e.tombstone) {
+    if (delDot && (!e.delDot || compareDot(delDot, e.delDot) > 0)) {
+      e.delDot = { actor: delDot.actor, ctr: delDot.ctr };
+      bumpVersion(seq);
+    }
     return;
   }
 
   e.tombstone = true;
+  if (delDot) {
+    e.delDot = { actor: delDot.actor, ctr: delDot.ctr };
+  }
   bumpVersion(seq);
 }
 
@@ -181,7 +188,7 @@ export function rgaCompactTombstones(seq: RgaSeq, isStable: (dot: Dot) => boolea
     }
 
     const elem = seq.elems.get(frame.id);
-    if (!elem || !elem.tombstone || !isStable(elem.insDot)) {
+    if (!elem || !elem.tombstone || !elem.delDot || !isStable(elem.delDot)) {
       continue;
     }
 
