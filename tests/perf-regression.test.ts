@@ -96,7 +96,36 @@ describe("performance regressions", () => {
 
     expect(clonedInputs.includes(base)).toBe(false);
   });
+  it("keeps explicit-base sequential move batches aligned on long patches", () => {
+    const base = createState(
+      {
+        meta: 0,
+        list: Array.from({ length: 250 }, (_, idx) => idx),
+      },
+      { actor: "perf" },
+    );
+    const head = applyPatch(base, [{ op: "replace", path: "/meta", value: 1 }]);
 
+    const patch: JsonPatchOp[] = [];
+    for (let i = 0; i < 120; i++) {
+      patch.push({ op: "move", from: "/list/0", path: "/list/-" });
+      patch.push({ op: "test", path: "/meta", value: 0 });
+    }
+
+    const next = applyPatch(head, patch, {
+      base,
+      semantics: "sequential",
+      testAgainst: "base",
+    });
+    const json = toJson(next) as { meta: number; list: number[] };
+    const expected = toJson(applyPatch(base, patch, { semantics: "sequential" })) as {
+      meta: number;
+      list: number[];
+    };
+
+    expect(json.list).toEqual(expected.list);
+    expect(json.meta).toBe(1);
+  });
   it("compacts high-volume stable tombstones without changing materialized output", () => {
     const initial: Record<string, JsonValue> = {};
     for (let i = 0; i < 400; i++) {
