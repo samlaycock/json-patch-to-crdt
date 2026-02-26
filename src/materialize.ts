@@ -1,7 +1,7 @@
-import type { JsonValue, Node } from "./types";
+import type { JsonValue, Node, ObjEntry } from "./types";
 
 import { assertTraversalDepth } from "./depth";
-import { rgaLinearizeIds } from "./rga";
+import { rgaCreateLinearCursor } from "./rga";
 
 function createMaterializedObject(): Record<string, JsonValue> {
   return Object.create(null) as Record<string, JsonValue>;
@@ -30,16 +30,13 @@ export function materialize(node: Node): JsonValue {
   type ObjFrame = {
     kind: "obj";
     depth: number;
-    entries: Array<[string, Node]>;
-    index: number;
+    entries: IterableIterator<[string, ObjEntry]>;
     out: Record<string, JsonValue>;
   };
   type SeqFrame = {
     kind: "seq";
     depth: number;
-    ids: string[];
-    index: number;
-    seq: Extract<Node, { kind: "seq" }>;
+    cursor: ReturnType<typeof rgaCreateLinearCursor>;
     out: JsonValue[];
   };
   type Frame = ObjFrame | SeqFrame;
@@ -49,17 +46,14 @@ export function materialize(node: Node): JsonValue {
     stack.push({
       kind: "obj",
       depth: 0,
-      entries: Array.from(node.entries.entries(), ([key, value]) => [key, value.node]),
-      index: 0,
+      entries: node.entries.entries(),
       out: root as Record<string, JsonValue>,
     });
   } else {
     stack.push({
       kind: "seq",
       depth: 0,
-      ids: rgaLinearizeIds(node),
-      index: 0,
-      seq: node,
+      cursor: rgaCreateLinearCursor(node),
       out: root as JsonValue[],
     });
   }
@@ -67,12 +61,14 @@ export function materialize(node: Node): JsonValue {
   while (stack.length > 0) {
     const frame = stack[stack.length - 1]!;
     if (frame.kind === "obj") {
-      if (frame.index >= frame.entries.length) {
+      const nextEntry = frame.entries.next();
+      if (nextEntry.done) {
         stack.pop();
         continue;
       }
 
-      const [key, child] = frame.entries[frame.index++]!;
+      const [key, entry] = nextEntry.value;
+      const child = entry.node;
       const childDepth = frame.depth + 1;
       assertTraversalDepth(childDepth);
 
@@ -87,11 +83,7 @@ export function materialize(node: Node): JsonValue {
         stack.push({
           kind: "obj",
           depth: childDepth,
-          entries: Array.from(child.entries.entries(), ([childKey, value]) => [
-            childKey,
-            value.node,
-          ]),
-          index: 0,
+          entries: child.entries.entries(),
           out: outObj,
         });
         continue;
@@ -102,21 +94,19 @@ export function materialize(node: Node): JsonValue {
       stack.push({
         kind: "seq",
         depth: childDepth,
-        ids: rgaLinearizeIds(child),
-        index: 0,
-        seq: child,
+        cursor: rgaCreateLinearCursor(child),
         out: outArr,
       });
       continue;
     }
 
-    if (frame.index >= frame.ids.length) {
+    const elem = frame.cursor.next();
+    if (!elem) {
       stack.pop();
       continue;
     }
 
-    const id = frame.ids[frame.index++]!;
-    const child = frame.seq.elems.get(id)!.value;
+    const child = elem.value;
     const childDepth = frame.depth + 1;
     assertTraversalDepth(childDepth);
 
@@ -131,8 +121,7 @@ export function materialize(node: Node): JsonValue {
       stack.push({
         kind: "obj",
         depth: childDepth,
-        entries: Array.from(child.entries.entries(), ([key, value]) => [key, value.node]),
-        index: 0,
+        entries: child.entries.entries(),
         out: outObj,
       });
       continue;
@@ -143,9 +132,7 @@ export function materialize(node: Node): JsonValue {
     stack.push({
       kind: "seq",
       depth: childDepth,
-      ids: rgaLinearizeIds(child),
-      index: 0,
-      seq: child,
+      cursor: rgaCreateLinearCursor(child),
       out: outArr,
     });
   }
