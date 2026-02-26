@@ -195,7 +195,8 @@ export function diffJsonPatch(
   const runtimeBase = coerceRuntimeJsonValue(base, runtimeMode);
   const runtimeNext = coerceRuntimeJsonValue(next, runtimeMode);
   const ops: JsonPatchOp[] = [];
-  diffValue([], runtimeBase, runtimeNext, ops, options);
+  const path: string[] = [];
+  diffValue(path, runtimeBase, runtimeNext, ops, options);
   return ops;
 }
 
@@ -231,30 +232,99 @@ function diffValue(
 
   const baseKeys = Object.keys(base).sort();
   const nextKeys = Object.keys(next).sort();
-  const baseSet = new Set(baseKeys);
-  const nextSet = new Set(nextKeys);
 
-  for (const key of baseKeys) {
-    if (!nextSet.has(key)) {
-      ops.push({ op: "remove", path: stringifyJsonPointer([...path, key]) });
+  let baseIndex = 0;
+  let nextIndex = 0;
+
+  while (baseIndex < baseKeys.length && nextIndex < nextKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    const nextKey = nextKeys[nextIndex]!;
+
+    if (baseKey === nextKey) {
+      baseIndex += 1;
+      nextIndex += 1;
+      continue;
     }
+
+    if (baseKey < nextKey) {
+      path.push(baseKey);
+      ops.push({ op: "remove", path: stringifyJsonPointer(path) });
+      path.pop();
+      baseIndex += 1;
+      continue;
+    }
+
+    nextIndex += 1;
   }
 
-  for (const key of nextKeys) {
-    if (!baseSet.has(key)) {
-      const nextValue = next[key]!;
-      ops.push({
-        op: "add",
-        path: stringifyJsonPointer([...path, key]),
-        value: nextValue,
-      });
-    }
+  while (baseIndex < baseKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    path.push(baseKey);
+    ops.push({ op: "remove", path: stringifyJsonPointer(path) });
+    path.pop();
+    baseIndex += 1;
   }
 
-  for (const key of baseKeys) {
-    if (nextSet.has(key)) {
-      diffValue([...path, key], base[key]!, next[key]!, ops, options);
+  baseIndex = 0;
+  nextIndex = 0;
+  while (baseIndex < baseKeys.length && nextIndex < nextKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    const nextKey = nextKeys[nextIndex]!;
+
+    if (baseKey === nextKey) {
+      baseIndex += 1;
+      nextIndex += 1;
+      continue;
     }
+
+    if (baseKey < nextKey) {
+      baseIndex += 1;
+      continue;
+    }
+
+    path.push(nextKey);
+    ops.push({
+      op: "add",
+      path: stringifyJsonPointer(path),
+      value: next[nextKey]!,
+    });
+    path.pop();
+    nextIndex += 1;
+  }
+
+  while (nextIndex < nextKeys.length) {
+    const nextKey = nextKeys[nextIndex]!;
+    path.push(nextKey);
+    ops.push({
+      op: "add",
+      path: stringifyJsonPointer(path),
+      value: next[nextKey]!,
+    });
+    path.pop();
+    nextIndex += 1;
+  }
+
+  baseIndex = 0;
+  nextIndex = 0;
+  while (baseIndex < baseKeys.length && nextIndex < nextKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    const nextKey = nextKeys[nextIndex]!;
+
+    if (baseKey === nextKey) {
+      path.push(baseKey);
+      diffValue(path, base[baseKey]!, next[nextKey]!, ops, options);
+      path.pop();
+      baseIndex += 1;
+      nextIndex += 1;
+      continue;
+    }
+
+    if (baseKey < nextKey) {
+      baseIndex += 1;
+      continue;
+    }
+
+    nextIndex += 1;
   }
 }
 
@@ -324,21 +394,27 @@ function diffArray(
     const lcsRight = j < m ? lcs[i]![j + 1]! : -1;
 
     if (j < m && (i === n || lcsRight > lcsDown)) {
+      const indexSegment = String(index);
+      path.push(indexSegment);
       localOps.push({
         op: "add",
-        path: stringifyJsonPointer([...path, String(index)]),
+        path: stringifyJsonPointer(path),
         value: next[nextStart + j]!,
       });
+      path.pop();
       j += 1;
       index += 1;
       continue;
     }
 
     if (i < n) {
+      const indexSegment = String(index);
+      path.push(indexSegment);
       localOps.push({
         op: "remove",
-        path: stringifyJsonPointer([...path, String(index)]),
+        path: stringifyJsonPointer(path),
       });
+      path.pop();
       i += 1;
       continue;
     }
