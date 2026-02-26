@@ -69,6 +69,14 @@ type RgaLinearCursor = {
   next: () => RgaElem | undefined;
 };
 
+export type RgaIndexedIdSnapshot = {
+  length: () => number;
+  idAt: (index: number) => ElemId | undefined;
+  prevForInsertAt: (index: number) => ElemId;
+  insertAt: (index: number, id: ElemId) => void;
+  deleteAt: (index: number) => ElemId | undefined;
+};
+
 export type RgaValidationIssue =
   | {
       code: "MISSING_PREDECESSOR";
@@ -141,6 +149,39 @@ export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
 
   linearCache.set(seq, { version: ver, ids: out });
   return [...out];
+}
+
+export function rgaCreateIndexedIdSnapshot(seq: RgaSeq): RgaIndexedIdSnapshot {
+  const ids = rgaLinearizeIds(seq);
+
+  return {
+    length() {
+      return ids.length;
+    },
+    idAt(index: number) {
+      return ids[index];
+    },
+    prevForInsertAt(index: number) {
+      if (index <= 0) {
+        return HEAD;
+      }
+
+      const prev = ids[index - 1];
+      return prev ?? (ids.length > 0 ? ids[ids.length - 1]! : HEAD);
+    },
+    insertAt(index: number, id: ElemId) {
+      const at = Math.max(0, Math.min(index, ids.length));
+      ids.splice(at, 0, id);
+    },
+    deleteAt(index: number) {
+      if (index < 0 || index >= ids.length) {
+        return undefined;
+      }
+
+      const [removed] = ids.splice(index, 1);
+      return removed;
+    },
+  };
 }
 
 export function rgaInsertAfter(
