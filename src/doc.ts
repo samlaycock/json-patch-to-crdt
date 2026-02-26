@@ -461,6 +461,46 @@ function isJsonPrimitive(value: JsonValue): value is null | string | number | bo
   );
 }
 
+const ARRAY_INDEX_TOKEN_PATTERN = /^(0|[1-9][0-9]*)$/;
+
+function getJsonAtDocPathForTest(doc: Doc, path: string[]): JsonValue {
+  let cur: Node = doc.root;
+
+  for (let i = 0; i < path.length; i++) {
+    const seg = path[i]!;
+    assertTraversalDepth(i + 1);
+
+    if (cur.kind === "obj") {
+      const ent = cur.entries.get(seg);
+      if (!ent) {
+        throw new Error(`Missing key '${seg}'`);
+      }
+
+      cur = ent.node;
+      continue;
+    }
+
+    if (cur.kind === "seq") {
+      if (!ARRAY_INDEX_TOKEN_PATTERN.test(seg)) {
+        throw new Error(`Expected array index, got '${seg}'`);
+      }
+
+      const idx = Number(seg);
+      const id = rgaIdAtIndex(cur, idx);
+      if (id === undefined) {
+        throw new Error(`Index out of bounds at '${seg}'`);
+      }
+
+      cur = cur.elems.get(id)!.value;
+      continue;
+    }
+
+    throw new Error(`Cannot traverse into non-container at '${seg}'`);
+  }
+
+  return cur.kind === "lww" ? cur.value : materialize(cur);
+}
+
 // ── Per-intent handlers ─────────────────────────────────────────────
 
 function applyTest(
@@ -469,11 +509,11 @@ function applyTest(
   it: Extract<IntentOp, { t: "Test" }>,
   evalTestAgainst: "head" | "base",
 ): ApplyResult | null {
-  const snapshot = evalTestAgainst === "head" ? materialize(head.root) : materialize(base.root);
   let got: JsonValue;
 
   try {
-    got = getAtJson(snapshot, it.path);
+    const targetDoc = evalTestAgainst === "head" ? head : base;
+    got = getJsonAtDocPathForTest(targetDoc, it.path);
   } catch {
     return {
       ok: false,
