@@ -34,6 +34,43 @@ function rgaChildrenIndex(seq: RgaSeq): Map<ElemId, RgaElem[]> {
   return idx;
 }
 
+type RgaLinearCursor = {
+  next: () => RgaElem | undefined;
+};
+
+export function rgaCreateLinearCursor(seq: RgaSeq): RgaLinearCursor {
+  const idx = rgaChildrenIndex(seq);
+  const stack: Array<{ children: RgaElem[]; index: number }> = [];
+  const rootChildren = idx.get(HEAD);
+  if (rootChildren) {
+    stack.push({ children: rootChildren, index: 0 });
+  }
+
+  return {
+    next() {
+      while (stack.length > 0) {
+        const frame = stack[stack.length - 1]!;
+        if (frame.index >= frame.children.length) {
+          stack.pop();
+          continue;
+        }
+
+        const child = frame.children[frame.index++]!;
+        const grandchildren = idx.get(child.id);
+        if (grandchildren) {
+          stack.push({ children: grandchildren, index: 0 });
+        }
+
+        if (!child.tombstone) {
+          return child;
+        }
+      }
+
+      return undefined;
+    },
+  };
+}
+
 export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
   const ver = getVersion(seq);
   const cached = linearCache.get(seq);
@@ -41,30 +78,10 @@ export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
     return [...cached.ids];
   }
 
-  const idx = rgaChildrenIndex(seq);
   const out: ElemId[] = [];
-  const stack: Array<{ children: RgaElem[]; index: number }> = [];
-  const rootChildren = idx.get(HEAD);
-  if (rootChildren) {
-    stack.push({ children: rootChildren, index: 0 });
-  }
-
-  while (stack.length > 0) {
-    const frame = stack[stack.length - 1]!;
-    if (frame.index >= frame.children.length) {
-      stack.pop();
-      continue;
-    }
-
-    const child = frame.children[frame.index++]!;
-    if (!child.tombstone) {
-      out.push(child.id);
-    }
-
-    const grandchildren = idx.get(child.id);
-    if (grandchildren) {
-      stack.push({ children: grandchildren, index: 0 });
-    }
+  const cursor = rgaCreateLinearCursor(seq);
+  for (let child = cursor.next(); child; child = cursor.next()) {
+    out.push(child.id);
   }
 
   linearCache.set(seq, { version: ver, ids: out });

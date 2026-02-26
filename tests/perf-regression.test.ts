@@ -197,4 +197,42 @@ describe("performance regressions", () => {
     expect(compacted.stats.objectTombstonesRemoved).toBeGreaterThanOrEqual(300);
     expect(toJson(compacted.state)).toEqual(before);
   });
+
+  it("materializes nested documents without Array.from traversal snapshots", () => {
+    const state = createState(
+      {
+        meta: { name: "doc", flags: { ready: true } },
+        items: Array.from({ length: 150 }, (_, idx) => ({
+          id: idx,
+          nested: { value: `v${idx}`, list: [idx, idx + 1] },
+        })),
+      },
+      { actor: "perf" },
+    );
+    const originalArrayFrom = Array.from;
+    let arrayFromCalls = 0;
+
+    Array.from = ((...args: unknown[]) => {
+      arrayFromCalls += 1;
+      return Reflect.apply(originalArrayFrom, Array, args);
+    }) as typeof Array.from;
+
+    try {
+      const json = toJson(state) as {
+        meta: { name: string; flags: { ready: boolean } };
+        items: Array<{ id: number; nested: { value: string; list: number[] } }>;
+      };
+
+      expect(json.meta.flags.ready).toBe(true);
+      expect(json.items).toHaveLength(150);
+      expect(json.items[149]).toEqual({
+        id: 149,
+        nested: { value: "v149", list: [149, 150] },
+      });
+    } finally {
+      Array.from = originalArrayFrom;
+    }
+
+    expect(arrayFromCalls).toBe(0);
+  });
 });
