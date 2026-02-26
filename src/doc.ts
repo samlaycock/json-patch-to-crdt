@@ -20,6 +20,7 @@ import { compareDot, dotToElemId } from "./dot";
 import { materialize } from "./materialize";
 import { newObj, newReg, newSeq, objRemove, objSet } from "./nodes";
 import {
+  ARRAY_INDEX_TOKEN_PATTERN,
   PatchCompileError,
   compileJsonPatchToIntent,
   diffJsonPatch,
@@ -460,8 +461,6 @@ function isJsonPrimitive(value: JsonValue): value is null | string | number | bo
     typeof value === "boolean"
   );
 }
-
-const ARRAY_INDEX_TOKEN_PATTERN = /^(0|[1-9][0-9]*)$/;
 
 function getJsonAtDocPathForTest(doc: Doc, path: string[]): JsonValue {
   let cur: Node = doc.root;
