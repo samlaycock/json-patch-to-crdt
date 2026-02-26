@@ -1122,6 +1122,43 @@ describe("serialization", () => {
     throw new Error("Expected deserializeDoc to reject missing sequence predecessors");
   });
 
+  it("rejects sequence elements whose prev links form a cycle", () => {
+    const malformed = {
+      root: {
+        kind: "seq",
+        elems: {
+          "A:1": {
+            id: "A:1",
+            prev: "A:2",
+            tombstone: false,
+            value: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            insDot: { actor: "A", ctr: 1 },
+          },
+          "A:2": {
+            id: "A:2",
+            prev: "A:1",
+            tombstone: false,
+            value: { kind: "lww", value: 2, dot: { actor: "A", ctr: 2 } },
+            insDot: { actor: "A", ctr: 2 },
+          },
+        },
+      },
+    } as unknown as SerializedDoc;
+
+    try {
+      deserializeDoc(malformed);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+        expect(error.path).toBe("/root/elems/A:1/prev");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeDoc to reject cyclic sequence predecessors");
+  });
+
   it("rejects invalid state clock shape with typed path context", () => {
     const malformed = {
       doc: {

@@ -231,7 +231,52 @@ function deserializeNode(node: unknown, path: string, depth: number): Node {
     }
   }
 
+  assertAcyclicRgaPredecessors(elems, path);
+
   return { kind: "seq", elems };
+}
+
+function assertAcyclicRgaPredecessors(elems: Map<string, RgaElem>, path: string): void {
+  const visitState = new Map<string, 1 | 2>();
+
+  for (const startId of elems.keys()) {
+    if (visitState.get(startId) === 2) {
+      continue;
+    }
+
+    const trail: string[] = [];
+    const trailSet = new Set<string>();
+    let currentId: string | undefined = startId;
+
+    while (currentId) {
+      if (trailSet.has(currentId)) {
+        fail(
+          "INVALID_SERIALIZED_INVARIANT",
+          `${path}/elems/${currentId}/prev`,
+          `sequence predecessor cycle detected at '${currentId}'`,
+        );
+      }
+
+      if (visitState.get(currentId) === 2) {
+        break;
+      }
+
+      trail.push(currentId);
+      trailSet.add(currentId);
+      visitState.set(currentId, 1);
+
+      const elem = elems.get(currentId);
+      if (!elem || elem.prev === HEAD_ELEM_ID) {
+        break;
+      }
+
+      currentId = elem.prev;
+    }
+
+    for (const id of trail) {
+      visitState.set(id, 2);
+    }
+  }
 }
 
 function asRecord(value: unknown, path: string): Record<string, unknown> {
