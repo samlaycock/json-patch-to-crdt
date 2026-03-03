@@ -144,6 +144,50 @@ describe("performance regressions", () => {
     expect(json.meta).toBe(1);
   });
 
+  it("keeps explicit-base sequential replace/test batches aligned on long patches", () => {
+    const base = createState(
+      {
+        meta: { version: 0 },
+        list: Array.from({ length: 180 }, (_, idx) => idx),
+      },
+      { actor: "perf" },
+    );
+    const head = applyPatch(base, [{ op: "replace", path: "/meta/version", value: 1 }]);
+
+    const patch: JsonPatchOp[] = [];
+    for (let i = 0; i < 140; i++) {
+      patch.push({
+        op: "replace",
+        path: `/list/${i % 160}`,
+        value: 20_000 + i,
+      });
+      patch.push({
+        op: "test",
+        path: "/meta/version",
+        value: 0,
+      });
+    }
+
+    const next = applyPatch(head, patch, {
+      base,
+      semantics: "sequential",
+      testAgainst: "base",
+    });
+    const expected = applyPatch(base, patch, { semantics: "sequential" });
+
+    const nextJson = toJson(next) as {
+      meta: { version: number };
+      list: number[];
+    };
+    const expectedJson = toJson(expected) as {
+      meta: { version: number };
+      list: number[];
+    };
+
+    expect(nextJson.list).toEqual(expectedJson.list);
+    expect(nextJson.meta.version).toBe(1);
+  });
+
   it("handles many test ops without materializing unrelated large branches", () => {
     const base = createState(
       {

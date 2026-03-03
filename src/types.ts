@@ -264,6 +264,8 @@ export type PatchSemantics = "base" | "sequential";
 /** Options for compile/validation helpers. */
 export type CompilePatchOptions = {
   semantics?: PatchSemantics;
+  pointerCache?: Map<string, string[]>;
+  opIndexOffset?: number;
 };
 
 /**

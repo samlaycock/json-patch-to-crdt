@@ -35,10 +35,12 @@ import {
 import { materialize } from "./materialize";
 import {
   PatchCompileError,
+  compileJsonPatchOpToIntent,
   compileJsonPatchToIntent,
   getAtJson,
   mapLookupErrorToPatchReason,
   parseJsonPointer,
+  stringifyJsonPointer,
 } from "./patch";
 
 /** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
@@ -299,17 +301,19 @@ function applyPatchInternal(
   options: ApplyPatchOptions,
   execution: "batch" | "step",
 ): ApplyResult {
+  const jsonValidation = options.jsonValidation ?? "none";
+  const preparedPatch = preparePatchPayloadsSafe(patch, jsonValidation);
+  if (!preparedPatch.ok) {
+    return preparedPatch;
+  }
+
+  const runtimePatch = preparedPatch.patch;
   const semantics: PatchSemantics = options.semantics ?? "sequential";
 
   if (semantics === "sequential") {
     if (!options.base && execution === "batch") {
       const baseJson = materialize(state.doc.root);
-      const compiled = compileIntents(
-        baseJson,
-        patch,
-        "sequential",
-        options.jsonValidation ?? "none",
-      );
+      const compiled = compilePreparedIntents(baseJson, runtimePatch, "sequential");
       if (!compiled.ok) {
         return compiled;
       }
@@ -333,12 +337,17 @@ function applyPatchInternal(
           clock: createClock("__base__", 0),
         }
       : null;
+    const session: SequentialApplySession = {
+      pointerCache: new Map(),
+      baseShadowParentCache: new Map(),
+      headShadowParentCache: new Map(),
+    };
     let sequentialHeadJson = materialize(state.doc.root);
     let sequentialBaseJson = explicitBaseState
       ? materialize(explicitBaseState.doc.root)
       : sequentialHeadJson;
 
-    for (const [opIndex, op] of patch.entries()) {
+    for (const [opIndex, op] of runtimePatch.entries()) {
       const baseDoc = explicitBaseState ? explicitBaseState.doc : state.doc;
       const step = applyPatchOpSequential(
         state,
@@ -349,6 +358,7 @@ function applyPatchInternal(
         sequentialHeadJson,
         explicitBaseState,
         opIndex,
+        session,
       );
       if (!step.ok) {
         return step;
@@ -362,7 +372,7 @@ function applyPatchInternal(
 
   const baseDoc = options.base ? options.base.doc : cloneDoc(state.doc);
   const baseJson = materialize(baseDoc.root);
-  const compiled = compileIntents(baseJson, patch, "base", options.jsonValidation ?? "none");
+  const compiled = compilePreparedIntents(baseJson, runtimePatch, "base");
   if (!compiled.ok) {
     return compiled;
   }
@@ -378,6 +388,14 @@ function applyPatchInternal(
   );
 }
 
+type ShadowParentCache = Map<string, JsonValue[] | Record<string, JsonValue>>;
+
+type SequentialApplySession = {
+  pointerCache: Map<string, string[]>;
+  baseShadowParentCache: ShadowParentCache;
+  headShadowParentCache: ShadowParentCache;
+};
+
 function applyPatchOpSequential(
   state: CrdtState,
   op: JsonPatchOp,
@@ -387,9 +405,10 @@ function applyPatchOpSequential(
   headJson: JsonValue,
   explicitBaseState: CrdtState | null,
   opIndex: number,
+  session: SequentialApplySession,
 ): ApplyPatchOpSequentialResult {
   if (op.op === "move") {
-    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex);
+    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex, session.pointerCache);
     if (!fromResolved.ok) {
       return fromResolved;
     }
@@ -403,6 +422,8 @@ function applyPatchOpSequential(
       { op: "remove", path: op.from },
       options,
       explicitBaseState,
+      opIndex,
+      session,
     );
     if (!removeRes.ok) {
       return removeRes;
@@ -423,6 +444,8 @@ function applyPatchOpSequential(
         addOp,
         options,
         null,
+        opIndex,
+        session,
       );
     }
 
@@ -434,6 +457,8 @@ function applyPatchOpSequential(
       addOp,
       options,
       null,
+      opIndex,
+      session,
     );
     if (!headAddRes.ok) {
       return headAddRes;
@@ -444,6 +469,8 @@ function applyPatchOpSequential(
       removeRes.baseJson,
       addOp,
       options,
+      opIndex,
+      session,
     );
     if (!shadowAddRes.ok) {
       return shadowAddRes;
@@ -457,7 +484,7 @@ function applyPatchOpSequential(
   }
 
   if (op.op === "copy") {
-    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex);
+    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex, session.pointerCache);
     if (!fromResolved.ok) {
       return fromResolved;
     }
@@ -474,6 +501,8 @@ function applyPatchOpSequential(
       },
       options,
       explicitBaseState,
+      opIndex,
+      session,
     );
   }
 
@@ -485,6 +514,8 @@ function applyPatchOpSequential(
     op,
     options,
     explicitBaseState,
+    opIndex,
+    session,
   );
 }
 
@@ -500,8 +531,10 @@ function applySinglePatchOpSequentialStep(
   op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
   options: ApplyPatchOptions,
   explicitBaseState: CrdtState | null,
+  opIndex: number,
+  session: SequentialApplySession,
 ): ApplyPatchOpSequentialResult {
-  const compiled = compileIntents(baseJson, [op], "sequential", options.jsonValidation ?? "none");
+  const compiled = compilePreparedIntents(baseJson, [op], "base", session.pointerCache, opIndex);
   if (!compiled.ok) {
     return compiled;
   }
@@ -538,8 +571,16 @@ function applySinglePatchOpSequentialStep(
     return { ok: true, baseJson, headJson };
   }
 
-  const nextBaseJson = applyJsonPatchOpToShadow(baseJson, op);
-  const nextHeadJson = explicitBaseState ? applyJsonPatchOpToShadow(headJson, op) : nextBaseJson;
+  const nextBaseJson = applyJsonPatchOpToShadow(baseJson, op, session.baseShadowParentCache, {
+    pointerCache: session.pointerCache,
+    opIndex,
+  });
+  const nextHeadJson = explicitBaseState
+    ? applyJsonPatchOpToShadow(headJson, op, session.headShadowParentCache, {
+        pointerCache: session.pointerCache,
+        opIndex,
+      })
+    : nextBaseJson;
   return {
     ok: true,
     baseJson: nextBaseJson,
@@ -552,8 +593,10 @@ function applySinglePatchOpExplicitShadowStep(
   baseJson: JsonValue,
   op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
   options: ApplyPatchOptions,
+  opIndex: number,
+  session: SequentialApplySession,
 ): { ok: true; baseJson: JsonValue } | ApplyError {
-  const compiled = compileIntents(baseJson, [op], "sequential", options.jsonValidation ?? "none");
+  const compiled = compilePreparedIntents(baseJson, [op], "base", session.pointerCache, opIndex);
   if (!compiled.ok) {
     return compiled;
   }
@@ -575,16 +618,30 @@ function applySinglePatchOpExplicitShadowStep(
     return { ok: true, baseJson };
   }
 
-  return { ok: true, baseJson: applyJsonPatchOpToShadow(baseJson, op) };
+  return {
+    ok: true,
+    baseJson: applyJsonPatchOpToShadow(baseJson, op, session.baseShadowParentCache, {
+      pointerCache: session.pointerCache,
+      opIndex,
+    }),
+  };
 }
 
 function applyJsonPatchOpToShadow(
   baseJson: JsonValue,
   op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
+  parentCache: ShadowParentCache,
+  pointerContext: { pointerCache: Map<string, string[]>; opIndex: number },
 ): JsonValue {
-  const path = parseJsonPointer(op.path);
+  const path = parsePointerWithCache(
+    op.path,
+    pointerContext.pointerCache,
+    op.path,
+    pointerContext.opIndex,
+  );
 
   if (path.length === 0) {
+    parentCache.clear();
     if (op.op === "test") {
       return baseJson;
     }
@@ -597,8 +654,10 @@ function applyJsonPatchOpToShadow(
   }
 
   const parentPath = path.slice(0, -1);
+  const parentPointer = stringifyJsonPointer(parentPath);
   const key = path[path.length - 1]!;
-  const parent = getAtJson(baseJson, parentPath);
+  const parent = resolveShadowParent(baseJson, parentPath, parentPointer, parentCache);
+  const pathPointer = stringifyJsonPointer(path);
 
   if (Array.isArray(parent)) {
     const idx = key === "-" ? parent.length : Number(key);
@@ -608,16 +667,19 @@ function applyJsonPatchOpToShadow(
 
     if (op.op === "add") {
       parent.splice(idx, 0, structuredClone(op.value));
+      invalidateArrayShadowParentCache(parentCache, parentPointer);
       return baseJson;
     }
 
     if (op.op === "remove") {
       parent.splice(idx, 1);
+      invalidateArrayShadowParentCache(parentCache, parentPointer);
       return baseJson;
     }
 
     if (op.op === "replace") {
       parent[idx] = structuredClone(op.value);
+      invalidateShadowPointerCache(parentCache, pathPointer);
       return baseJson;
     }
 
@@ -627,35 +689,109 @@ function applyJsonPatchOpToShadow(
   const obj = parent as Record<string, JsonValue>;
   if (op.op === "add" || op.op === "replace") {
     obj[key] = structuredClone(op.value);
+    invalidateShadowPointerCache(parentCache, pathPointer);
     return baseJson;
   }
 
   if (op.op === "remove") {
     delete obj[key];
+    invalidateShadowPointerCache(parentCache, pathPointer);
     return baseJson;
   }
 
   return baseJson;
 }
 
+function resolveShadowParent(
+  baseJson: JsonValue,
+  parentPath: string[],
+  parentPointer: string,
+  parentCache: ShadowParentCache,
+): JsonValue[] | Record<string, JsonValue> {
+  const cachedParent = parentCache.get(parentPointer);
+  if (cachedParent) {
+    return cachedParent;
+  }
+
+  const parentValue = parentPath.length === 0 ? baseJson : getAtJson(baseJson, parentPath);
+  if (!Array.isArray(parentValue) && !(parentValue && typeof parentValue === "object")) {
+    throw new Error(
+      `Cannot mutate JSON shadow at non-container parent ${parentPointer || "<root>"}`,
+    );
+  }
+
+  parentCache.set(parentPointer, parentValue);
+  return parentValue;
+}
+
+function invalidateShadowPointerCache(parentCache: ShadowParentCache, pointer: string): void {
+  if (pointer === "") {
+    parentCache.clear();
+    return;
+  }
+
+  const pointerPrefix = `${pointer}/`;
+  for (const cachedPointer of parentCache.keys()) {
+    if (cachedPointer === pointer || cachedPointer.startsWith(pointerPrefix)) {
+      parentCache.delete(cachedPointer);
+    }
+  }
+}
+
+function invalidateArrayShadowParentCache(
+  parentCache: ShadowParentCache,
+  parentPointer: string,
+): void {
+  if (parentPointer === "") {
+    parentCache.clear();
+    return;
+  }
+
+  const pointerPrefix = `${parentPointer}/`;
+  for (const cachedPointer of parentCache.keys()) {
+    if (cachedPointer.startsWith(pointerPrefix)) {
+      parentCache.delete(cachedPointer);
+    }
+  }
+}
+
+function parsePointerWithCache(
+  pointer: string,
+  pointerCache: Map<string, string[]>,
+  path: string,
+  opIndex: number,
+): string[] {
+  const cachedPath = pointerCache.get(pointer);
+  if (cachedPath) {
+    return cachedPath;
+  }
+
+  try {
+    const parsedPath = parseJsonPointer(pointer);
+    pointerCache.set(pointer, parsedPath);
+    return parsedPath;
+  } catch (error) {
+    throw toPointerParseApplyError(error, path, opIndex);
+  }
+}
+
 function resolveValueAtPointer(
   baseJson: JsonValue,
   pointer: string,
   opIndex: number,
+  pointerCache: Map<string, string[]>,
 ): { ok: true; value: JsonValue } | ApplyError {
-  let path: string[];
   try {
-    path = parseJsonPointer(pointer);
-  } catch (error) {
-    return toPointerParseApplyError(error, pointer, opIndex);
-  }
-
-  try {
+    const path = parsePointerWithCache(pointer, pointerCache, pointer, opIndex);
     return {
       ok: true,
       value: getAtJson(baseJson, path),
     };
   } catch (error) {
+    if (isApplyError(error)) {
+      return error;
+    }
+
     return toPointerLookupApplyError(error, pointer, opIndex);
   }
 }
@@ -666,20 +802,46 @@ function bumpClockCounter(state: CrdtState, ctr: number): void {
   }
 }
 
-function compileIntents(
+function compilePreparedIntents(
   baseJson: JsonValue,
   patch: JsonPatchOp[],
   semantics: PatchSemantics = "sequential",
-  jsonValidation: JsonValidationMode = "none",
+  pointerCache?: Map<string, string[]>,
+  opIndexOffset = 0,
 ): { ok: true; intents: IntentOp[] } | ApplyError {
   try {
-    const runtimePatch = preparePatchPayloads(patch, jsonValidation);
+    if (patch.length === 1) {
+      return {
+        ok: true,
+        intents: compileJsonPatchOpToIntent(baseJson, patch[0]!, {
+          semantics,
+          pointerCache,
+          opIndexOffset,
+        }),
+      };
+    }
 
     return {
       ok: true,
-      intents: compileJsonPatchToIntent(baseJson, runtimePatch, {
+      intents: compileJsonPatchToIntent(baseJson, patch, {
         semantics,
+        pointerCache,
+        opIndexOffset,
       }),
+    };
+  } catch (error) {
+    return toApplyError(error);
+  }
+}
+
+function preparePatchPayloadsSafe(
+  patch: JsonPatchOp[],
+  mode: JsonValidationMode,
+): { ok: true; patch: JsonPatchOp[] } | ApplyError {
+  try {
+    return {
+      ok: true,
+      patch: preparePatchPayloads(patch, mode),
     };
   } catch (error) {
     return toApplyError(error);
@@ -789,6 +951,15 @@ function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
   }
 
   return best;
+}
+
+function isApplyError(error: unknown): error is ApplyError {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeApplyError = error as Partial<ApplyError>;
+  return maybeApplyError.ok === false && maybeApplyError.code === 409;
 }
 
 function toApplyError(error: unknown): ApplyError {
