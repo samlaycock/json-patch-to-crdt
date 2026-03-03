@@ -160,21 +160,40 @@ export function compileJsonPatchToIntent(
   options: CompilePatchOptions = {},
 ): IntentOp[] {
   const semantics = options.semantics ?? "sequential";
+  const opIndexOffset = options.opIndexOffset ?? 0;
   let workingBase: JsonValue = baseJson;
-  const pointerCache = new Map<string, string[]>();
+  const pointerCache = options.pointerCache ?? new Map<string, string[]>();
   const intents: IntentOp[] = [];
 
   for (let opIndex = 0; opIndex < patch.length; opIndex++) {
     const op = patch[opIndex]!;
+    const absoluteOpIndex = opIndex + opIndexOffset;
     const compileBase = semantics === "sequential" ? workingBase : baseJson;
-    intents.push(...compileSingleOp(compileBase, op, opIndex, semantics, pointerCache));
+    intents.push(...compileSingleOp(compileBase, op, absoluteOpIndex, semantics, pointerCache));
 
     if (semantics === "sequential") {
-      workingBase = applyPatchOpToJsonWithStructuralSharing(workingBase, op, opIndex, pointerCache);
+      workingBase = applyPatchOpToJsonWithStructuralSharing(
+        workingBase,
+        op,
+        absoluteOpIndex,
+        pointerCache,
+      );
     }
   }
 
   return intents;
+}
+
+/** Compile a single JSON Patch operation into CRDT intents. */
+export function compileJsonPatchOpToIntent(
+  baseJson: JsonValue,
+  op: JsonPatchOp,
+  options: CompilePatchOptions = {},
+): IntentOp[] {
+  const semantics = options.semantics ?? "sequential";
+  const pointerCache = options.pointerCache ?? new Map<string, string[]>();
+  const opIndex = options.opIndexOffset ?? 0;
+  return compileSingleOp(baseJson, op, opIndex, semantics, pointerCache);
 }
 
 /**
