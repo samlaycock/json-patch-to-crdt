@@ -636,12 +636,12 @@ function applyJsonPatchOpToShadow(
   parentCache: ShadowParentCache,
   pointerContext: { pointerCache: Map<string, string[]>; opIndex: number },
 ): JsonValue {
-  const path = parsePointerWithCache(
-    op.path,
-    pointerContext.pointerCache,
-    op.path,
-    pointerContext.opIndex,
-  );
+  let path: string[];
+  try {
+    path = parsePointerWithCache(op.path, pointerContext.pointerCache);
+  } catch (error) {
+    throw toPointerParseCompileError(error, op.path, pointerContext.opIndex);
+  }
 
   if (path.length === 0) {
     parentCache.clear();
@@ -712,7 +712,7 @@ function resolveShadowParent(
   parentCache: ShadowParentCache,
 ): JsonValue[] | Record<string, JsonValue> {
   const cachedParent = parentCache.get(parentPointer);
-  if (cachedParent) {
+  if (cachedParent !== undefined) {
     return cachedParent;
   }
 
@@ -758,24 +758,16 @@ function invalidateArrayShadowParentCache(
   }
 }
 
-function parsePointerWithCache(
-  pointer: string,
-  pointerCache: Map<string, string[]>,
-  path: string,
-  opIndex: number,
-): string[] {
+function parsePointerWithCache(pointer: string, pointerCache: Map<string, string[]>): string[] {
   const cachedPath = pointerCache.get(pointer);
-  if (cachedPath) {
-    return cachedPath;
+  if (cachedPath !== undefined) {
+    // Return a copy so downstream callers cannot mutate cached pointer segments.
+    return cachedPath.slice();
   }
 
-  try {
-    const parsedPath = parseJsonPointer(pointer);
-    pointerCache.set(pointer, parsedPath);
-    return parsedPath;
-  } catch (error) {
-    throw toPointerParseApplyError(error, path, opIndex);
-  }
+  const parsedPath = parseJsonPointer(pointer);
+  pointerCache.set(pointer, parsedPath);
+  return parsedPath.slice();
 }
 
 function resolveValueAtPointer(
@@ -784,17 +776,19 @@ function resolveValueAtPointer(
   opIndex: number,
   pointerCache: Map<string, string[]>,
 ): { ok: true; value: JsonValue } | ApplyError {
+  let path: string[];
   try {
-    const path = parsePointerWithCache(pointer, pointerCache, pointer, opIndex);
+    path = parsePointerWithCache(pointer, pointerCache);
+  } catch (error) {
+    return toPointerParseApplyError(error, pointer, opIndex);
+  }
+
+  try {
     return {
       ok: true,
       value: getAtJson(baseJson, path),
     };
   } catch (error) {
-    if (isApplyError(error)) {
-      return error;
-    }
-
     return toPointerLookupApplyError(error, pointer, opIndex);
   }
 }
@@ -956,15 +950,6 @@ function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
   return best;
 }
 
-function isApplyError(error: unknown): error is ApplyError {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const maybeApplyError = error as Partial<ApplyError>;
-  return maybeApplyError.ok === false && maybeApplyError.code === 409;
-}
-
 function toApplyError(error: unknown): ApplyError {
   if (error instanceof TraversalDepthError) {
     return toDepthApplyError(error);
@@ -998,6 +983,19 @@ function toPointerParseApplyError(error: unknown, pointer: string, opIndex: numb
     path: pointer,
     opIndex,
   };
+}
+
+function toPointerParseCompileError(
+  error: unknown,
+  pointer: string,
+  opIndex: number,
+): PatchCompileError {
+  return new PatchCompileError(
+    "INVALID_POINTER",
+    error instanceof Error ? error.message : "invalid pointer",
+    pointer,
+    opIndex,
+  );
 }
 
 function toPointerLookupApplyError(error: unknown, pointer: string, opIndex: number): ApplyError {
