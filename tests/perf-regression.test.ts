@@ -144,6 +144,25 @@ describe("performance regressions", () => {
     expect(json.meta).toBe(1);
   });
 
+  it("keeps explicit-base sequential move steps aligned when head diverges from base", () => {
+    const base = createState({ arr: [1, 2, 3] }, { actor: "perf" });
+    const head = applyPatch(base, [{ op: "replace", path: "/arr/0", value: 10 }]);
+
+    const patch: JsonPatchOp[] = [
+      { op: "move", from: "/arr/1", path: "/arr/0" },
+      { op: "replace", path: "/arr/2", value: 77 },
+    ];
+
+    const next = applyPatch(head, patch, {
+      base,
+      semantics: "sequential",
+      testAgainst: "base",
+    });
+    const json = toJson(next) as { arr: number[] };
+
+    expect(json.arr).toEqual([2, 10, 77]);
+  });
+
   it("keeps explicit-base sequential replace/test batches aligned on long patches", () => {
     const base = createState(
       {
