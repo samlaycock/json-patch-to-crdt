@@ -534,6 +534,8 @@ function applySinglePatchOpSequentialStep(
   opIndex: number,
   session: SequentialApplySession,
 ): ApplyPatchOpSequentialResult {
+  // `move`/`copy` are decomposed in `applyPatchOpSequential` before reaching this
+  // helper, so single-op compile semantics are equivalent for add/remove/replace/test.
   const compiled = compilePreparedIntents(baseJson, [op], "base", session.pointerCache, opIndex);
   if (!compiled.ok) {
     return compiled;
@@ -745,6 +747,8 @@ function invalidateArrayShadowParentCache(
   parentCache: ShadowParentCache,
   parentPointer: string,
 ): void {
+  // Splice mutates the parent array in place, so the cached parent reference stays valid.
+  // Only descendants under that parent are invalidated because numeric indices may shift.
   if (parentPointer === "") {
     parentCache.clear();
     return;
