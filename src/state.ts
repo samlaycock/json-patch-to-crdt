@@ -571,7 +571,10 @@ function applySinglePatchOpSequentialStep(
     return { ok: true, baseJson, headJson };
   }
 
-  const nextBaseJson = applyJsonPatchOpToShadow(baseJson, op, session.baseShadowParentCache, {
+  const baseShadowCache = explicitBaseState
+    ? session.baseShadowParentCache
+    : session.headShadowParentCache;
+  const nextBaseJson = applyJsonPatchOpToShadow(baseJson, op, baseShadowCache, {
     pointerCache: session.pointerCache,
     opIndex,
   });
