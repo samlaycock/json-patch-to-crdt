@@ -27,9 +27,11 @@ import {
   getAtJson,
   jsonEquals,
   parseJsonPointer,
+  stringifyJsonPointer,
 } from "./patch";
 import {
   HEAD,
+  rgaCreateLinearCursor,
   rgaCreateIndexedIdSnapshot,
   rgaDelete,
   rgaIdAtIndex,
@@ -1031,6 +1033,282 @@ export function jsonPatchToCrdtSafe(
 /** Alias for codebases that prefer `try*` naming for non-throwing APIs. */
 export const tryJsonPatchToCrdt = jsonPatchToCrdtSafe;
 
+function nodeToJsonForPatch(node: Node): JsonValue {
+  return node.kind === "lww" ? node.value : materialize(node);
+}
+
+function rebaseDiffOps(path: string[], nestedOps: JsonPatchOp[], out: JsonPatchOp[]): void {
+  const prefix = stringifyJsonPointer(path);
+
+  for (const op of nestedOps) {
+    const rebasedPath = prefix === "" ? op.path : op.path === "" ? prefix : `${prefix}${op.path}`;
+
+    if (op.op === "remove") {
+      out.push({ op: "remove", path: rebasedPath });
+      continue;
+    }
+
+    if (op.op === "add" || op.op === "replace") {
+      out.push({
+        op: op.op,
+        path: rebasedPath,
+        value: op.value,
+      });
+      continue;
+    }
+
+    throw new Error(`Unexpected op '${op.op}' from diffJsonPatch`);
+  }
+}
+
+function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean {
+  assertTraversalDepth(depth);
+
+  if (baseNode === headNode) {
+    return true;
+  }
+
+  if (baseNode.kind !== headNode.kind) {
+    return false;
+  }
+
+  if (baseNode.kind === "lww") {
+    if (headNode.kind !== "lww") {
+      return false;
+    }
+
+    return jsonEquals(baseNode.value, headNode.value);
+  }
+
+  if (baseNode.kind === "obj") {
+    if (headNode.kind !== "obj") {
+      return false;
+    }
+
+    if (baseNode.entries.size !== headNode.entries.size) {
+      return false;
+    }
+
+    for (const [key, baseEntry] of baseNode.entries.entries()) {
+      const headEntry = headNode.entries.get(key);
+      if (!headEntry) {
+        return false;
+      }
+
+      if (!nodesJsonEqual(baseEntry.node, headEntry.node, depth + 1)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  if (headNode.kind !== "seq") {
+    return false;
+  }
+
+  const baseCursor = rgaCreateLinearCursor(baseNode);
+  const headCursor = rgaCreateLinearCursor(headNode);
+
+  while (true) {
+    const baseElem = baseCursor.next();
+    const headElem = headCursor.next();
+    if (!baseElem || !headElem) {
+      return baseElem === undefined && headElem === undefined;
+    }
+
+    if (!nodesJsonEqual(baseElem.value, headElem.value, depth + 1)) {
+      return false;
+    }
+  }
+}
+
+function diffObjectNodes(
+  path: string[],
+  baseNode: ObjNode,
+  headNode: ObjNode,
+  options: DiffOptions,
+  ops: JsonPatchOp[],
+  depth: number,
+): void {
+  assertTraversalDepth(depth);
+
+  const baseKeys = [...baseNode.entries.keys()].sort();
+  const headKeys = [...headNode.entries.keys()].sort();
+
+  let baseIndex = 0;
+  let headIndex = 0;
+
+  while (baseIndex < baseKeys.length && headIndex < headKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    const headKey = headKeys[headIndex]!;
+
+    if (baseKey === headKey) {
+      baseIndex += 1;
+      headIndex += 1;
+      continue;
+    }
+
+    if (baseKey < headKey) {
+      path.push(baseKey);
+      ops.push({ op: "remove", path: stringifyJsonPointer(path) });
+      path.pop();
+      baseIndex += 1;
+      continue;
+    }
+
+    headIndex += 1;
+  }
+
+  while (baseIndex < baseKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    path.push(baseKey);
+    ops.push({ op: "remove", path: stringifyJsonPointer(path) });
+    path.pop();
+    baseIndex += 1;
+  }
+
+  baseIndex = 0;
+  headIndex = 0;
+  while (baseIndex < baseKeys.length && headIndex < headKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    const headKey = headKeys[headIndex]!;
+
+    if (baseKey === headKey) {
+      baseIndex += 1;
+      headIndex += 1;
+      continue;
+    }
+
+    if (baseKey < headKey) {
+      baseIndex += 1;
+      continue;
+    }
+
+    const headEntry = headNode.entries.get(headKey)!;
+    path.push(headKey);
+    ops.push({
+      op: "add",
+      path: stringifyJsonPointer(path),
+      value: nodeToJsonForPatch(headEntry.node),
+    });
+    path.pop();
+    headIndex += 1;
+  }
+
+  while (headIndex < headKeys.length) {
+    const headKey = headKeys[headIndex]!;
+    const headEntry = headNode.entries.get(headKey)!;
+    path.push(headKey);
+    ops.push({
+      op: "add",
+      path: stringifyJsonPointer(path),
+      value: nodeToJsonForPatch(headEntry.node),
+    });
+    path.pop();
+    headIndex += 1;
+  }
+
+  baseIndex = 0;
+  headIndex = 0;
+  while (baseIndex < baseKeys.length && headIndex < headKeys.length) {
+    const baseKey = baseKeys[baseIndex]!;
+    const headKey = headKeys[headIndex]!;
+
+    if (baseKey === headKey) {
+      const baseEntry = baseNode.entries.get(baseKey)!;
+      const headEntry = headNode.entries.get(headKey)!;
+      if (!nodesJsonEqual(baseEntry.node, headEntry.node, depth + 1)) {
+        path.push(baseKey);
+        diffNodeToPatch(path, baseEntry.node, headEntry.node, options, ops, depth + 1);
+        path.pop();
+      }
+      baseIndex += 1;
+      headIndex += 1;
+      continue;
+    }
+
+    if (baseKey < headKey) {
+      baseIndex += 1;
+      continue;
+    }
+
+    headIndex += 1;
+  }
+}
+
+function diffNodeToPatch(
+  path: string[],
+  baseNode: Node,
+  headNode: Node,
+  options: DiffOptions,
+  ops: JsonPatchOp[],
+  depth: number,
+): void {
+  assertTraversalDepth(depth);
+
+  if (baseNode === headNode) {
+    return;
+  }
+
+  if (baseNode.kind !== headNode.kind) {
+    ops.push({
+      op: "replace",
+      path: stringifyJsonPointer(path),
+      value: nodeToJsonForPatch(headNode),
+    });
+    return;
+  }
+
+  if (baseNode.kind === "lww") {
+    if (headNode.kind !== "lww") {
+      ops.push({
+        op: "replace",
+        path: stringifyJsonPointer(path),
+        value: nodeToJsonForPatch(headNode),
+      });
+      return;
+    }
+
+    if (jsonEquals(baseNode.value, headNode.value)) {
+      return;
+    }
+
+    ops.push({
+      op: "replace",
+      path: stringifyJsonPointer(path),
+      value: headNode.value,
+    });
+    return;
+  }
+
+  if (baseNode.kind === "obj") {
+    if (headNode.kind !== "obj") {
+      ops.push({
+        op: "replace",
+        path: stringifyJsonPointer(path),
+        value: nodeToJsonForPatch(headNode),
+      });
+      return;
+    }
+
+    diffObjectNodes(path, baseNode, headNode, options, ops, depth + 1);
+    return;
+  }
+
+  if (headNode.kind !== "seq") {
+    ops.push({
+      op: "replace",
+      path: stringifyJsonPointer(path),
+      value: nodeToJsonForPatch(headNode),
+    });
+    return;
+  }
+
+  const seqOps = diffJsonPatch(materialize(baseNode), materialize(headNode), options);
+  rebaseDiffOps(path, seqOps, ops);
+}
+
 /**
  * Generate a JSON Patch delta between two CRDT documents.
  * @param base - The base document snapshot.
@@ -1039,7 +1317,14 @@ export const tryJsonPatchToCrdt = jsonPatchToCrdtSafe;
  * @returns An array of JSON Patch operations that transform base into head.
  */
 export function crdtToJsonPatch(base: Doc, head: Doc, options?: DiffOptions): JsonPatchOp[] {
-  return diffJsonPatch(materialize(base.root), materialize(head.root), options);
+  // Preserve full-document runtime guardrail behavior for strict/normalize modes.
+  if ((options?.jsonValidation ?? "none") !== "none") {
+    return diffJsonPatch(materialize(base.root), materialize(head.root), options);
+  }
+
+  const ops: JsonPatchOp[] = [];
+  diffNodeToPatch([], base.root, head.root, options ?? {}, ops, 0);
+  return ops;
 }
 
 /**
