@@ -40,7 +40,6 @@ import {
   getAtJson,
   mapLookupErrorToPatchReason,
   parseJsonPointer,
-  stringifyJsonPointer,
 } from "./patch";
 
 /** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
@@ -658,11 +657,11 @@ function applyJsonPatchOpToShadow(
     return structuredClone(op.value);
   }
 
+  const pathPointer = op.path;
   const parentPath = path.slice(0, -1);
-  const parentPointer = stringifyJsonPointer(parentPath);
+  const parentPointer = pointerParent(pathPointer);
   const key = path[path.length - 1]!;
   const parent = resolveShadowParent(baseJson, parentPath, parentPointer, parentCache);
-  const pathPointer = stringifyJsonPointer(path);
 
   if (Array.isArray(parent)) {
     const idx = key === "-" ? parent.length : Number(key);
@@ -750,7 +749,11 @@ function invalidateArrayShadowParentCache(
   // Splice mutates the parent array in place, so the cached parent reference stays valid.
   // Only descendants under that parent are invalidated because numeric indices may shift.
   if (parentPointer === "") {
-    parentCache.clear();
+    for (const cachedPointer of parentCache.keys()) {
+      if (cachedPointer !== "") {
+        parentCache.delete(cachedPointer);
+      }
+    }
     return;
   }
 
@@ -760,6 +763,19 @@ function invalidateArrayShadowParentCache(
       parentCache.delete(cachedPointer);
     }
   }
+}
+
+function pointerParent(pointer: string): string {
+  if (pointer === "") {
+    return "";
+  }
+
+  const lastSlash = pointer.lastIndexOf("/");
+  if (lastSlash <= 0) {
+    return "";
+  }
+
+  return pointer.slice(0, lastSlash);
 }
 
 function parsePointerWithCache(pointer: string, pointerCache: Map<string, string[]>): string[] {
