@@ -12,6 +12,11 @@ import { ROOT_KEY } from "./types";
 
 const DEFAULT_LCS_MAX_CELLS = 250_000;
 
+type InternalCompilePatchOptions = {
+  pointerCache?: Map<string, string[]>;
+  opIndexOffset?: number;
+};
+
 /** Structured compile error used to map patch validation failures to typed reasons. */
 export class PatchCompileError extends Error {
   readonly reason: PatchErrorReason;
@@ -159,10 +164,12 @@ export function compileJsonPatchToIntent(
   patch: JsonPatchOp[],
   options: CompilePatchOptions = {},
 ): IntentOp[] {
+  // Internal session hints are threaded from state.ts via structural typing.
+  const internalOptions = options as CompilePatchOptions & InternalCompilePatchOptions;
   const semantics = options.semantics ?? "sequential";
-  const opIndexOffset = options.opIndexOffset ?? 0;
+  const opIndexOffset = internalOptions.opIndexOffset ?? 0;
   let workingBase: JsonValue = baseJson;
-  const pointerCache = options.pointerCache ?? new Map<string, string[]>();
+  const pointerCache = internalOptions.pointerCache ?? new Map<string, string[]>();
   const intents: IntentOp[] = [];
 
   for (let opIndex = 0; opIndex < patch.length; opIndex++) {
@@ -190,9 +197,11 @@ export function compileJsonPatchOpToIntent(
   op: JsonPatchOp,
   options: CompilePatchOptions = {},
 ): IntentOp[] {
+  // Internal session hints are threaded from state.ts via structural typing.
+  const internalOptions = options as CompilePatchOptions & InternalCompilePatchOptions;
   const semantics = options.semantics ?? "sequential";
-  const pointerCache = options.pointerCache ?? new Map<string, string[]>();
-  const opIndex = options.opIndexOffset ?? 0;
+  const pointerCache = internalOptions.pointerCache ?? new Map<string, string[]>();
+  const opIndex = internalOptions.opIndexOffset ?? 0;
   return compileSingleOp(baseJson, op, opIndex, semantics, pointerCache);
 }
 

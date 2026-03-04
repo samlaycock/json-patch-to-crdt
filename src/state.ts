@@ -6,6 +6,7 @@ import type {
   ApplyPatchInPlaceOptions,
   ApplyPatchOptions,
   ApplyResult,
+  CompilePatchOptions,
   CreateStateOptions,
   CrdtState,
   Doc,
@@ -827,28 +828,34 @@ function compilePreparedIntents(
   opIndexOffset = 0,
 ): { ok: true; intents: IntentOp[] } | ApplyError {
   try {
+    const compileOptions = toCompilePatchOptions(semantics, pointerCache, opIndexOffset);
     if (patch.length === 1) {
       return {
         ok: true,
-        intents: compileJsonPatchOpToIntent(baseJson, patch[0]!, {
-          semantics,
-          pointerCache,
-          opIndexOffset,
-        }),
+        intents: compileJsonPatchOpToIntent(baseJson, patch[0]!, compileOptions),
       };
     }
 
     return {
       ok: true,
-      intents: compileJsonPatchToIntent(baseJson, patch, {
-        semantics,
-        pointerCache,
-        opIndexOffset,
-      }),
+      intents: compileJsonPatchToIntent(baseJson, patch, compileOptions),
     };
   } catch (error) {
     return toApplyError(error);
   }
+}
+
+function toCompilePatchOptions(
+  semantics: PatchSemantics,
+  pointerCache?: Map<string, string[]>,
+  opIndexOffset = 0,
+): CompilePatchOptions {
+  // Internal session hints are consumed in patch.ts but are not part of the public type.
+  return {
+    semantics,
+    pointerCache,
+    opIndexOffset,
+  } as CompilePatchOptions;
 }
 
 function preparePatchPayloadsSafe(
