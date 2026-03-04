@@ -1099,6 +1099,37 @@ describe("crdtToJsonPatch", () => {
     expect(crdtToJsonPatch(base, head)).toEqual([{ op: "replace", path: "/arr/1", value: 3 }]);
   });
 
+  it("preserves strict runtime JSON validation behavior", () => {
+    const baseRoot = newObj();
+    objSet(baseRoot, "value", newReg(1, dot("A", 1)), dot("A", 1));
+    const headRoot = newObj();
+    objSet(headRoot, "value", newReg(Number.NaN as unknown as JsonValue, dot("A", 2)), dot("A", 2));
+
+    expect(() =>
+      crdtToJsonPatch({ root: baseRoot }, { root: headRoot }, { jsonValidation: "strict" }),
+    ).toThrow("invalid JSON value at /value");
+  });
+
+  it("skips unchanged shared CRDT subtrees when generating deltas", () => {
+    const shared = newObj();
+    objSet(shared, "leaf", newReg("keep", dot("A", 1)), dot("A", 1));
+    (shared.entries as unknown as { entries: () => never }).entries = () => {
+      throw new Error("shared subtree traversal should be skipped");
+    };
+
+    const baseRoot = newObj();
+    objSet(baseRoot, "hot", newReg(1, dot("A", 2)), dot("A", 2));
+    objSet(baseRoot, "cold", shared, dot("A", 3));
+
+    const headRoot = newObj();
+    objSet(headRoot, "hot", newReg(2, dot("A", 4)), dot("A", 4));
+    objSet(headRoot, "cold", shared, dot("A", 3));
+
+    expect(crdtToJsonPatch({ root: baseRoot }, { root: headRoot })).toEqual([
+      { op: "replace", path: "/hot", value: 2 },
+    ]);
+  });
+
   it("round-trips base via delta patch for random nested docs", () => {
     const rng = new SeededRng(123);
     for (let i = 0; i < 60; i++) {
