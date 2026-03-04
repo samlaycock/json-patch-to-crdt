@@ -1073,24 +1073,19 @@ function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean 
   }
 
   if (baseNode.kind === "lww") {
-    if (headNode.kind !== "lww") {
-      return false;
-    }
-
-    return jsonEquals(baseNode.value, headNode.value);
+    const headLww = headNode as typeof baseNode;
+    return jsonEquals(baseNode.value, headLww.value);
   }
 
   if (baseNode.kind === "obj") {
-    if (headNode.kind !== "obj") {
-      return false;
-    }
+    const headObj = headNode as ObjNode;
 
-    if (baseNode.entries.size !== headNode.entries.size) {
+    if (baseNode.entries.size !== headObj.entries.size) {
       return false;
     }
 
     for (const [key, baseEntry] of baseNode.entries.entries()) {
-      const headEntry = headNode.entries.get(key);
+      const headEntry = headObj.entries.get(key);
       if (!headEntry) {
         return false;
       }
@@ -1103,12 +1098,11 @@ function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean 
     return true;
   }
 
-  if (headNode.kind !== "seq") {
-    return false;
-  }
-
+  // This deep equality check can cost one extra sequence walk for non-identical
+  // but equal arrays, in exchange for skipping materialization when equal.
+  const headSeq = headNode as RgaSeq;
   const baseCursor = rgaCreateLinearCursor(baseNode);
-  const headCursor = rgaCreateLinearCursor(headNode);
+  const headCursor = rgaCreateLinearCursor(headSeq);
 
   while (true) {
     const baseElem = baseCursor.next();
@@ -1261,51 +1255,27 @@ function diffNodeToPatch(
   }
 
   if (baseNode.kind === "lww") {
-    if (headNode.kind !== "lww") {
-      ops.push({
-        op: "replace",
-        path: stringifyJsonPointer(path),
-        value: nodeToJsonForPatch(headNode),
-      });
-      return;
-    }
+    const headLww = headNode as typeof baseNode;
 
-    if (jsonEquals(baseNode.value, headNode.value)) {
+    if (jsonEquals(baseNode.value, headLww.value)) {
       return;
     }
 
     ops.push({
       op: "replace",
       path: stringifyJsonPointer(path),
-      value: headNode.value,
+      value: headLww.value,
     });
     return;
   }
 
   if (baseNode.kind === "obj") {
-    if (headNode.kind !== "obj") {
-      ops.push({
-        op: "replace",
-        path: stringifyJsonPointer(path),
-        value: nodeToJsonForPatch(headNode),
-      });
-      return;
-    }
-
-    diffObjectNodes(path, baseNode, headNode, options, ops, depth + 1);
+    diffObjectNodes(path, baseNode, headNode as ObjNode, options, ops, depth + 1);
     return;
   }
 
-  if (headNode.kind !== "seq") {
-    ops.push({
-      op: "replace",
-      path: stringifyJsonPointer(path),
-      value: nodeToJsonForPatch(headNode),
-    });
-    return;
-  }
-
-  const seqOps = diffJsonPatch(materialize(baseNode), materialize(headNode), options);
+  const headSeq = headNode as RgaSeq;
+  const seqOps = diffJsonPatch(materialize(baseNode), materialize(headSeq), options);
   rebaseDiffOps(path, seqOps, ops);
 }
 

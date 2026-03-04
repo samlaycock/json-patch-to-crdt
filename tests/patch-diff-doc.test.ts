@@ -1112,10 +1112,8 @@ describe("crdtToJsonPatch", () => {
 
   it("skips unchanged shared CRDT subtrees when generating deltas", () => {
     const shared = newObj();
-    objSet(shared, "leaf", newReg("keep", dot("A", 1)), dot("A", 1));
-    (shared.entries as unknown as { entries: () => never }).entries = () => {
-      throw new Error("shared subtree traversal should be skipped");
-    };
+    // A self-cycle would fail materialization if traversed.
+    objSet(shared, "self", shared, dot("A", 1));
 
     const baseRoot = newObj();
     objSet(baseRoot, "hot", newReg(1, dot("A", 2)), dot("A", 2));
@@ -1128,6 +1126,9 @@ describe("crdtToJsonPatch", () => {
     expect(crdtToJsonPatch({ root: baseRoot }, { root: headRoot })).toEqual([
       { op: "replace", path: "/hot", value: 2 },
     ]);
+    expect(() =>
+      crdtToJsonPatch({ root: baseRoot }, { root: headRoot }, { jsonValidation: "strict" }),
+    ).toThrow(TraversalDepthError);
   });
 
   it("round-trips base via delta patch for random nested docs", () => {
