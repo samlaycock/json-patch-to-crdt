@@ -423,6 +423,19 @@ describe("diffJsonPatch", () => {
     ]);
   });
 
+  it("handles single unmatched base elements against large next arrays with linear-space LCS", () => {
+    const base: JsonValue = { arr: [9_999] };
+    const next: JsonValue = {
+      arr: Array.from({ length: 3_000 }, (_, idx) => idx),
+    };
+
+    const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+    expect(ops[0]).toEqual({ op: "replace", path: "/arr/0", value: 0 });
+    expect(ops).toHaveLength(3_000);
+  });
+
   it("produces nested array paths with LCS", () => {
     const base: JsonValue = { obj: { arr: [1, 2] } };
     const next: JsonValue = { obj: { arr: [1, 3] } };
