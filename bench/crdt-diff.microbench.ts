@@ -64,8 +64,11 @@ function measure(name: string, runs: number, fn: () => void): BenchmarkStats {
 
   const sorted = [...samplesMs].sort((a, b) => a - b);
   const total = samplesMs.reduce((acc, value) => acc + value, 0);
+  // GC can make a single-run heap delta negative, so exclude those noisy samples.
+  const nonNegativeHeapDeltasMb = heapDeltasMb.filter((value) => value >= 0);
   const avgHeapDeltaMb =
-    heapDeltasMb.reduce((acc, value) => acc + value, 0) / Math.max(1, heapDeltasMb.length);
+    nonNegativeHeapDeltasMb.reduce((acc, value) => acc + value, 0) /
+    Math.max(1, nonNegativeHeapDeltasMb.length);
 
   return {
     name,
@@ -117,6 +120,7 @@ function runScenario(coldSize: number, runs: number): void {
 
   const expected = legacyCrdtToJsonPatch(base.doc, head.doc, options);
   const native = crdtToJsonPatch(base.doc, head.doc, options);
+  // Both paths preserve deterministic op ordering, so this is enough for a smoke check.
   if (JSON.stringify(expected) !== JSON.stringify(native)) {
     throw new Error("native crdtToJsonPatch output diverged from legacy diff");
   }

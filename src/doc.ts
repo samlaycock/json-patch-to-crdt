@@ -1107,7 +1107,7 @@ function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean 
   while (true) {
     const baseElem = baseCursor.next();
     const headElem = headCursor.next();
-    if (!baseElem || !headElem) {
+    if (baseElem === undefined || headElem === undefined) {
       return baseElem === undefined && headElem === undefined;
     }
 
