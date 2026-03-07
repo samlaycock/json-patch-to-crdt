@@ -305,6 +305,9 @@ function runScenario(width: number, runs: number): void {
   const legacyExpected = legacyDiffJsonPatch(base, next);
   const optimizedExpected = diffJsonPatch(base, next);
 
+  // This benchmark intentionally uses flat wide objects. The inlined legacy
+  // implementation replaces arrays atomically, so this guard is only valid for
+  // the non-array input shape used here.
   if (JSON.stringify(legacyExpected) !== JSON.stringify(optimizedExpected)) {
     throw new Error("optimized object diff output diverged from legacy output");
   }
