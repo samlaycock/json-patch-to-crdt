@@ -1,4 +1,4 @@
-This is JavaScript library that implements a JavaScript code interpreter.
+This is JavaScript library containing utilities for converting between JSON Patch (RFC 6902) and CRDT data types.
 This project uses Bun as the package manager. NEVER use `npm` or `yarn` to install dependencies or run scripts.
 
 For rules to follow when making Git operations, see [GIT.md](conventions/GIT.md)
