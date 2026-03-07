@@ -1,5 +1,43 @@
 # json-patch-to-crdt
 
+## 0.2.1
+
+### Patch Changes
+
+- 185de71: Optimize wide-object JSON Patch diffing by collapsing object key add/remove work into fewer deterministic passes. Add regression coverage and a focused microbenchmark for large object diffs.
+- 13f9c72: Optimize long explicit-base sequential patch application by reusing a per-apply session for
+  pointer parsing, single-op intent compilation, and JSON shadow parent-path lookups. This reduces
+  repeated per-op overhead while preserving RFC 6902 sequential semantics.
+
+  Add explicit-base sequential microbenchmark coverage and new performance regression tests to guard
+  alignment behavior on long replace/test and move-heavy batches.
+
+- 0dc6744: Repair `deserializeState` clock restoration by lifting stale serialized actor counters to the
+  highest dot already present in the deserialized document, preventing duplicate dot generation
+  after restart. Includes a regression test for tampered serialized clock metadata.
+- f1a9711: Reduce repeated indexed-array RGA lookups during intent application by reusing per-sequence
+  index snapshots across an apply session and incrementally updating them when base and head share
+  the same evolving array. Includes a perf regression test covering repeated indexed deletes on an
+  evolving base snapshot.
+- cc63450: Add internals RGA validation helpers and a checked insert API to detect missing predecessors, cycles, and orphaned elements in custom sequence construction.
+- afe729c: Optimize array insert dot allocation by caching the max sibling insert dot per predecessor so
+  repeated inserts no longer rescan the full RGA sequence. Includes a performance regression test
+  covering repeated append workloads.
+- 939dc6e: Add a CRDT-native `crdtToJsonPatch` diff path that walks CRDT nodes directly instead of
+  materializing both documents up front. The new path skips unchanged shared subtrees, only
+  materializes changed regions when emitting add/replace values, and reuses JSON diffing only for
+  changed array regions.
+
+  Keep strict/normalize `jsonValidation` behavior compatible by falling back to the legacy
+  materialize-and-diff path for those modes.
+
+  Add regression coverage for subtree-skipping behavior and a dedicated CRDT diff microbenchmark
+  (`bun run bench:crdt-diff`) to compare native vs legacy performance on mostly unchanged large docs.
+
+- a634b99: Fix sequence tombstone compaction so deleted RGA elements are only pruned when the delete event itself is causally stable.
+
+  This stores per-element delete metadata (`delDot`) for sequence tombstones, preserves it through merge/clone/serialization, and adds regression coverage for delete -> compact -> merge without resurrection.
+
 ## 0.2.0
 
 ### Minor Changes
