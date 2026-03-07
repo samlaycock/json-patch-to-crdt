@@ -42,6 +42,7 @@
     "fmt:check": "oxfmt . --check",
     "typecheck": "tsc --noEmit",
     "build": "tsdown --config tsdown.config.mts",
+    "bench:array-diff": "bun run bench/array-diff.microbench.ts",
     "bench:crdt-diff": "bun run bench/crdt-diff.microbench.ts",
     "bench:object-diff": "bun run bench/object-diff.microbench.ts",
     "bench:sequential": "bun run bench/sequential-apply.microbench.ts",

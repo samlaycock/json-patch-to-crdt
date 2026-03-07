@@ -381,12 +381,14 @@ export type DiffOptions = {
   /**
    * Array diff mode.
    * - `"lcs"` (default): index-level edits using LCS.
+   * - `"lcs-linear"`: index-level edits using a lower-memory LCS variant.
    * - `"atomic"`: one-op root/field replacement for changed arrays.
    */
-  arrayStrategy?: "atomic" | "lcs";
+  arrayStrategy?: "atomic" | "lcs" | "lcs-linear";
   /**
    * Maximum LCS matrix cells (`(base.length + 1) * (next.length + 1)`) before
-   * falling back to atomic replacement. Defaults to `250_000`.
+   * falling back to atomic replacement for `arrayStrategy: "lcs"`.
+   * Defaults to `250_000`.
    *
    * Set to `Number.POSITIVE_INFINITY` to always allow LCS.
    */
