@@ -1288,7 +1288,7 @@ function diffNodeToPatch(
  * Generate a JSON Patch delta between two CRDT documents.
  * @param base - The base document snapshot.
  * @param head - The current document state.
- * @param options - Diff options (e.g. `{ arrayStrategy: "lcs" }`).
+ * @param options - Diff options (e.g. `{ arrayStrategy: "lcs" }` or `{ arrayStrategy: "lcs-linear" }`).
  * @returns An array of JSON Patch operations that transform base into head.
  */
 export function crdtToJsonPatch(base: Doc, head: Doc, options?: DiffOptions): JsonPatchOp[] {
