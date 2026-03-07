@@ -14,6 +14,7 @@ import {
   tryApplyPatchInPlace,
   validateJsonPatch,
   cloneClock,
+  crdtNodesToJsonPatch,
   compareDot,
   compileJsonPatchToIntent,
   diffJsonPatch,
@@ -1129,6 +1130,18 @@ describe("crdtToJsonPatch", () => {
     expect(() =>
       crdtToJsonPatch({ root: baseRoot }, { root: headRoot }, { jsonValidation: "strict" }),
     ).toThrow(TraversalDepthError);
+  });
+
+  it("keeps object depth accounting aligned with materialize traversal limits", () => {
+    const baseRoot = newObj();
+    objSet(baseRoot, "child", newReg(1, dot("A", 1)), dot("A", 2));
+
+    const headRoot = newObj();
+    objSet(headRoot, "child", newReg(2, dot("A", 3)), dot("A", 4));
+
+    expect(crdtNodesToJsonPatch(baseRoot, headRoot, {}, MAX_TRAVERSAL_DEPTH - 1)).toEqual([
+      { op: "replace", path: "/child", value: 2 },
+    ]);
   });
 
   it("round-trips base via delta patch for random nested docs", () => {
