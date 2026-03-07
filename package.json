@@ -43,6 +43,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsdown --config tsdown.config.mts",
     "bench:crdt-diff": "bun run bench/crdt-diff.microbench.ts",
+    "bench:object-diff": "bun run bench/object-diff.microbench.ts",
     "bench:sequential": "bun run bench/sequential-apply.microbench.ts",
     "test:state-core": "bun test tests/state-core.test.ts",
     "test:patch-diff-doc": "bun test tests/patch-diff-doc.test.ts",

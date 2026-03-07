@@ -258,8 +258,19 @@ function diffValue(
     return;
   }
 
+  diffObject(path, base, next, ops, options);
+}
+
+function diffObject(
+  path: string[],
+  base: Record<string, JsonValue>,
+  next: Record<string, JsonValue>,
+  ops: JsonPatchOp[],
+  options: DiffOptions,
+): void {
   const baseKeys = Object.keys(base).sort();
   const nextKeys = Object.keys(next).sort();
+  const nextOnlyKeys: string[] = [];
 
   let baseIndex = 0;
   let nextIndex = 0;
@@ -282,6 +293,7 @@ function diffValue(
       continue;
     }
 
+    nextOnlyKeys.push(nextKey);
     nextIndex += 1;
   }
 
@@ -293,35 +305,12 @@ function diffValue(
     baseIndex += 1;
   }
 
-  baseIndex = 0;
-  nextIndex = 0;
-  while (baseIndex < baseKeys.length && nextIndex < nextKeys.length) {
-    const baseKey = baseKeys[baseIndex]!;
-    const nextKey = nextKeys[nextIndex]!;
-
-    if (baseKey === nextKey) {
-      baseIndex += 1;
-      nextIndex += 1;
-      continue;
-    }
-
-    if (baseKey < nextKey) {
-      baseIndex += 1;
-      continue;
-    }
-
-    path.push(nextKey);
-    ops.push({
-      op: "add",
-      path: stringifyJsonPointer(path),
-      value: next[nextKey]!,
-    });
-    path.pop();
+  while (nextIndex < nextKeys.length) {
+    nextOnlyKeys.push(nextKeys[nextIndex]!);
     nextIndex += 1;
   }
 
-  while (nextIndex < nextKeys.length) {
-    const nextKey = nextKeys[nextIndex]!;
+  for (const nextKey of nextOnlyKeys) {
     path.push(nextKey);
     ops.push({
       op: "add",
@@ -329,7 +318,6 @@ function diffValue(
       value: next[nextKey]!,
     });
     path.pop();
-    nextIndex += 1;
   }
 
   baseIndex = 0;
