@@ -1034,6 +1034,9 @@ export function jsonPatchToCrdtSafe(
 export const tryJsonPatchToCrdt = jsonPatchToCrdtSafe;
 
 function nodeToJsonForPatch(node: Node): JsonValue {
+  // Materialization intentionally restarts depth from 0 here: traversal guards
+  // already bound recursive diff walks, and resetting avoids false depth errors
+  // when emitting add/replace payloads for deep but non-cyclic subtrees.
   return node.kind === "lww" ? node.value : materialize(node);
 }
 
