@@ -1257,6 +1257,8 @@ function diffNodeToPatch(
   if (baseNode.kind === "lww") {
     const headLww = headNode as typeof baseNode;
 
+    // Object diff pass 3 may have already compared these leaves to skip equal subtrees.
+    // Re-checking here keeps direct/root LWW diffs self-contained without materialization.
     if (jsonEquals(baseNode.value, headLww.value)) {
       return;
     }
@@ -1270,7 +1272,7 @@ function diffNodeToPatch(
   }
 
   if (baseNode.kind === "obj") {
-    diffObjectNodes(path, baseNode, headNode as ObjNode, options, ops, depth + 1);
+    diffObjectNodes(path, baseNode, headNode as ObjNode, options, ops, depth);
     return;
   }
 
@@ -1292,8 +1294,18 @@ export function crdtToJsonPatch(base: Doc, head: Doc, options?: DiffOptions): Js
     return diffJsonPatch(materialize(base.root), materialize(head.root), options);
   }
 
+  return crdtNodesToJsonPatch(base.root, head.root, options);
+}
+
+/** Internals-only helper for diffing CRDT nodes from an existing traversal depth. */
+export function crdtNodesToJsonPatch(
+  baseNode: Node,
+  headNode: Node,
+  options?: DiffOptions,
+  depth = 0,
+): JsonPatchOp[] {
   const ops: JsonPatchOp[] = [];
-  diffNodeToPatch([], base.root, head.root, options ?? {}, ops, 0);
+  diffNodeToPatch([], baseNode, headNode, options ?? {}, ops, depth);
   return ops;
 }
 

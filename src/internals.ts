@@ -26,6 +26,7 @@ export {
   jsonPatchToCrdtSafe,
   tryJsonPatchToCrdt,
   crdtToJsonPatch,
+  crdtNodesToJsonPatch,
   crdtToFullReplace,
 } from "./doc";
 
