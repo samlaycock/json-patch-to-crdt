@@ -309,6 +309,27 @@ describe("diffJsonPatch", () => {
     ]);
   });
 
+  it("keeps wide object diffs granular and deterministically ordered", () => {
+    const baseEntries = Array.from(
+      { length: 1_500 },
+      (_, idx) => [`k${String(idx).padStart(4, "0")}`, idx] satisfies [string, JsonValue],
+    );
+    const base = Object.fromEntries(baseEntries) as Record<string, JsonValue>;
+    const next = { ...base };
+
+    delete next.k0001;
+    next.k1500 = 1_500;
+    next.k0750 = -1;
+
+    const ops = diffJsonPatch(base, next);
+
+    expect(ops).toEqual([
+      { op: "remove", path: "/k0001" },
+      { op: "add", path: "/k1500", value: 1_500 },
+      { op: "replace", path: "/k0750", value: -1 },
+    ]);
+  });
+
   it("replaces arrays as atomic values when requested", () => {
     const base: JsonValue = { arr: [1, 2] };
     const next: JsonValue = { arr: [1, 3] };
