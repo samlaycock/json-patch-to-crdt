@@ -11,6 +11,17 @@ import { coerceRuntimeJsonValue } from "./json-value";
 import { ROOT_KEY } from "./types";
 
 const DEFAULT_LCS_MAX_CELLS = 250_000;
+const LINEAR_LCS_MATRIX_BASE_CASE_MAX_CELLS = 4_096;
+
+type ArrayDiffStep = { kind: "add"; value: JsonValue } | { kind: "equal" } | { kind: "remove" };
+
+type TrimmedArrayWindow = {
+  baseStart: number;
+  nextStart: number;
+  prefixLength: number;
+  unmatchedBaseLength: number;
+  unmatchedNextLength: number;
+};
 
 type InternalCompilePatchOptions = {
   pointerCache?: Map<string, string[]>;
@@ -209,6 +220,7 @@ export function compileJsonPatchOpToIntent(
  * Compute a JSON Patch delta between two JSON values.
  * By default arrays use a deterministic LCS strategy.
  * Pass `{ arrayStrategy: "atomic" }` for single-op array replacement.
+ * Pass `{ arrayStrategy: "lcs-linear" }` for a lower-memory LCS variant.
  * @param base - The original JSON value.
  * @param next - The target JSON value.
  * @param options - Diff options.
@@ -243,9 +255,14 @@ function diffValue(
     const arrayStrategy = options.arrayStrategy ?? "lcs";
 
     if (arrayStrategy === "lcs" && Array.isArray(base) && Array.isArray(next)) {
-      if (!diffArray(path, base, next, ops, options.lcsMaxCells)) {
+      if (!diffArrayWithLcsMatrix(path, base, next, ops, options.lcsMaxCells)) {
         ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
       }
+      return;
+    }
+
+    if (arrayStrategy === "lcs-linear" && Array.isArray(base) && Array.isArray(next)) {
+      diffArrayWithLinearLcs(path, base, next, ops);
       return;
     }
 
@@ -356,34 +373,18 @@ function diffValue(
   }
 }
 
-function diffArray(
+function diffArrayWithLcsMatrix(
   path: string[],
   base: JsonValue[],
   next: JsonValue[],
   ops: JsonPatchOp[],
   lcsMaxCells?: number,
 ): boolean {
-  const baseLength = base.length;
-  const nextLength = next.length;
-  let prefix = 0;
-
-  while (prefix < baseLength && prefix < nextLength && jsonEquals(base[prefix]!, next[prefix]!)) {
-    prefix += 1;
-  }
-
-  let suffix = 0;
-  while (
-    suffix < baseLength - prefix &&
-    suffix < nextLength - prefix &&
-    jsonEquals(base[baseLength - 1 - suffix]!, next[nextLength - 1 - suffix]!)
-  ) {
-    suffix += 1;
-  }
-
-  const baseStart = prefix;
-  const nextStart = prefix;
-  const n = baseLength - prefix - suffix;
-  const m = nextLength - prefix - suffix;
+  const window = trimEqualArrayEdges(base, next);
+  const baseStart = window.baseStart;
+  const nextStart = window.nextStart;
+  const n = window.unmatchedBaseLength;
+  const m = window.unmatchedNextLength;
 
   if (!shouldUseLcsDiff(n, m, lcsMaxCells)) {
     return false;
@@ -393,63 +394,292 @@ function diffArray(
     return true;
   }
 
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+  const steps = buildArrayEditScriptWithMatrix(
+    base,
+    baseStart,
+    baseStart + n,
+    next,
+    nextStart,
+    nextStart + m,
+  );
+  pushArrayPatchOps(path, window.prefixLength, steps, ops);
+  return true;
+}
 
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      if (jsonEquals(base[baseStart + i]!, next[nextStart + j]!)) {
-        lcs[i]![j] = 1 + lcs[i + 1]![j + 1]!;
+function diffArrayWithLinearLcs(
+  path: string[],
+  base: JsonValue[],
+  next: JsonValue[],
+  ops: JsonPatchOp[],
+): void {
+  const window = trimEqualArrayEdges(base, next);
+  const steps: ArrayDiffStep[] = [];
+  buildArrayEditScriptLinearSpace(
+    base,
+    window.baseStart,
+    window.baseStart + window.unmatchedBaseLength,
+    next,
+    window.nextStart,
+    window.nextStart + window.unmatchedNextLength,
+    steps,
+  );
+
+  pushArrayPatchOps(path, window.prefixLength, steps, ops);
+}
+
+function trimEqualArrayEdges(base: JsonValue[], next: JsonValue[]): TrimmedArrayWindow {
+  const baseLength = base.length;
+  const nextLength = next.length;
+  let prefixLength = 0;
+
+  while (
+    prefixLength < baseLength &&
+    prefixLength < nextLength &&
+    jsonEquals(base[prefixLength]!, next[prefixLength]!)
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < baseLength - prefixLength &&
+    suffixLength < nextLength - prefixLength &&
+    jsonEquals(base[baseLength - 1 - suffixLength]!, next[nextLength - 1 - suffixLength]!)
+  ) {
+    suffixLength += 1;
+  }
+
+  return {
+    baseStart: prefixLength,
+    nextStart: prefixLength,
+    prefixLength,
+    unmatchedBaseLength: baseLength - prefixLength - suffixLength,
+    unmatchedNextLength: nextLength - prefixLength - suffixLength,
+  };
+}
+
+function buildArrayEditScriptLinearSpace(
+  base: JsonValue[],
+  baseStart: number,
+  baseEnd: number,
+  next: JsonValue[],
+  nextStart: number,
+  nextEnd: number,
+  steps: ArrayDiffStep[],
+): void {
+  const unmatchedBaseLength = baseEnd - baseStart;
+  const unmatchedNextLength = nextEnd - nextStart;
+
+  if (unmatchedBaseLength === 0) {
+    for (let nextIndex = nextStart; nextIndex < nextEnd; nextIndex++) {
+      steps.push({ kind: "add", value: next[nextIndex]! });
+    }
+    return;
+  }
+
+  if (unmatchedNextLength === 0) {
+    for (let baseIndex = baseStart; baseIndex < baseEnd; baseIndex++) {
+      steps.push({ kind: "remove" });
+    }
+    return;
+  }
+
+  if (shouldUseMatrixBaseCase(unmatchedBaseLength, unmatchedNextLength)) {
+    steps.push(
+      ...buildArrayEditScriptWithMatrix(base, baseStart, baseEnd, next, nextStart, nextEnd),
+    );
+    return;
+  }
+
+  const baseMid = baseStart + Math.floor(unmatchedBaseLength / 2);
+  const forwardScores = computeLcsPrefixLengths(base, baseStart, baseMid, next, nextStart, nextEnd);
+  const reverseScores = computeLcsSuffixLengths(base, baseMid, baseEnd, next, nextStart, nextEnd);
+
+  let bestOffset = 0;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let offset = 0; offset <= unmatchedNextLength; offset++) {
+    const score = forwardScores[offset]! + reverseScores[offset]!;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestOffset = offset;
+    }
+  }
+
+  const nextMid = nextStart + bestOffset;
+  buildArrayEditScriptLinearSpace(base, baseStart, baseMid, next, nextStart, nextMid, steps);
+  buildArrayEditScriptLinearSpace(base, baseMid, baseEnd, next, nextMid, nextEnd, steps);
+}
+
+function shouldUseMatrixBaseCase(baseLength: number, nextLength: number): boolean {
+  return (baseLength + 1) * (nextLength + 1) <= LINEAR_LCS_MATRIX_BASE_CASE_MAX_CELLS;
+}
+
+function buildArrayEditScriptWithMatrix(
+  base: JsonValue[],
+  baseStart: number,
+  baseEnd: number,
+  next: JsonValue[],
+  nextStart: number,
+  nextEnd: number,
+): ArrayDiffStep[] {
+  const unmatchedBaseLength = baseEnd - baseStart;
+  const unmatchedNextLength = nextEnd - nextStart;
+  const lcs: number[][] = Array.from({ length: unmatchedBaseLength + 1 }, () =>
+    Array(unmatchedNextLength + 1).fill(0),
+  );
+
+  for (let baseOffset = unmatchedBaseLength - 1; baseOffset >= 0; baseOffset--) {
+    for (let nextOffset = unmatchedNextLength - 1; nextOffset >= 0; nextOffset--) {
+      if (jsonEquals(base[baseStart + baseOffset]!, next[nextStart + nextOffset]!)) {
+        lcs[baseOffset]![nextOffset] = 1 + lcs[baseOffset + 1]![nextOffset + 1]!;
       } else {
-        lcs[i]![j] = Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+        lcs[baseOffset]![nextOffset] = Math.max(
+          lcs[baseOffset + 1]![nextOffset]!,
+          lcs[baseOffset]![nextOffset + 1]!,
+        );
       }
     }
   }
 
-  const localOps: JsonPatchOp[] = [];
-  let i = 0;
-  let j = 0;
-  let index = prefix;
+  const steps: ArrayDiffStep[] = [];
+  let baseOffset = 0;
+  let nextOffset = 0;
 
-  while (i < n || j < m) {
-    if (i < n && j < m && jsonEquals(base[baseStart + i]!, next[nextStart + j]!)) {
-      i += 1;
-      j += 1;
-      index += 1;
+  while (baseOffset < unmatchedBaseLength || nextOffset < unmatchedNextLength) {
+    if (
+      baseOffset < unmatchedBaseLength &&
+      nextOffset < unmatchedNextLength &&
+      jsonEquals(base[baseStart + baseOffset]!, next[nextStart + nextOffset]!)
+    ) {
+      steps.push({ kind: "equal" });
+      baseOffset += 1;
+      nextOffset += 1;
       continue;
     }
 
-    const lcsDown = i < n ? lcs[i + 1]![j]! : -1;
-    const lcsRight = j < m ? lcs[i]![j + 1]! : -1;
+    const lcsDown = baseOffset < unmatchedBaseLength ? lcs[baseOffset + 1]![nextOffset]! : -1;
+    const lcsRight = nextOffset < unmatchedNextLength ? lcs[baseOffset]![nextOffset + 1]! : -1;
 
-    if (j < m && (i === n || lcsRight > lcsDown)) {
-      const indexSegment = String(index);
-      path.push(indexSegment);
-      localOps.push({
-        op: "add",
-        path: stringifyJsonPointer(path),
-        value: next[nextStart + j]!,
-      });
-      path.pop();
-      j += 1;
-      index += 1;
+    if (
+      nextOffset < unmatchedNextLength &&
+      (baseOffset === unmatchedBaseLength || lcsRight > lcsDown)
+    ) {
+      steps.push({ kind: "add", value: next[nextStart + nextOffset]! });
+      nextOffset += 1;
       continue;
     }
 
-    if (i < n) {
-      const indexSegment = String(index);
-      path.push(indexSegment);
-      localOps.push({
-        op: "remove",
-        path: stringifyJsonPointer(path),
-      });
-      path.pop();
-      i += 1;
-      continue;
+    if (baseOffset < unmatchedBaseLength) {
+      steps.push({ kind: "remove" });
+      baseOffset += 1;
     }
   }
 
+  return steps;
+}
+
+function computeLcsPrefixLengths(
+  base: JsonValue[],
+  baseStart: number,
+  baseEnd: number,
+  next: JsonValue[],
+  nextStart: number,
+  nextEnd: number,
+): Int32Array {
+  const unmatchedNextLength = nextEnd - nextStart;
+  let previousRow = new Int32Array(unmatchedNextLength + 1);
+  let currentRow = new Int32Array(unmatchedNextLength + 1);
+
+  for (let baseIndex = baseStart; baseIndex < baseEnd; baseIndex++) {
+    for (let nextOffset = 0; nextOffset < unmatchedNextLength; nextOffset++) {
+      if (jsonEquals(base[baseIndex]!, next[nextStart + nextOffset]!)) {
+        currentRow[nextOffset + 1] = previousRow[nextOffset]! + 1;
+      } else {
+        currentRow[nextOffset + 1] = Math.max(
+          previousRow[nextOffset + 1]!,
+          currentRow[nextOffset]!,
+        );
+      }
+    }
+
+    const nextPreviousRow = currentRow;
+    currentRow = previousRow;
+    previousRow = nextPreviousRow;
+    currentRow.fill(0);
+  }
+
+  return previousRow;
+}
+
+function computeLcsSuffixLengths(
+  base: JsonValue[],
+  baseStart: number,
+  baseEnd: number,
+  next: JsonValue[],
+  nextStart: number,
+  nextEnd: number,
+): Int32Array {
+  const unmatchedNextLength = nextEnd - nextStart;
+  let previousRow = new Int32Array(unmatchedNextLength + 1);
+  let currentRow = new Int32Array(unmatchedNextLength + 1);
+
+  for (let baseIndex = baseEnd - 1; baseIndex >= baseStart; baseIndex--) {
+    for (let nextOffset = unmatchedNextLength - 1; nextOffset >= 0; nextOffset--) {
+      if (jsonEquals(base[baseIndex]!, next[nextStart + nextOffset]!)) {
+        currentRow[nextOffset] = previousRow[nextOffset + 1]! + 1;
+      } else {
+        currentRow[nextOffset] = Math.max(previousRow[nextOffset]!, currentRow[nextOffset + 1]!);
+      }
+    }
+
+    const nextPreviousRow = currentRow;
+    currentRow = previousRow;
+    previousRow = nextPreviousRow;
+    currentRow.fill(0);
+  }
+
+  return previousRow;
+}
+
+function pushArrayPatchOps(
+  path: string[],
+  startIndex: number,
+  steps: ArrayDiffStep[],
+  ops: JsonPatchOp[],
+): void {
+  const localOps: JsonPatchOp[] = [];
+  let index = startIndex;
+
+  for (const step of steps) {
+    if (step.kind === "equal") {
+      index += 1;
+      continue;
+    }
+
+    const indexSegment = String(index);
+    path.push(indexSegment);
+
+    if (step.kind === "add") {
+      localOps.push({
+        op: "add",
+        path: stringifyJsonPointer(path),
+        value: step.value,
+      });
+      index += 1;
+      path.pop();
+      continue;
+    }
+
+    localOps.push({
+      op: "remove",
+      path: stringifyJsonPointer(path),
+    });
+    path.pop();
+  }
+
   ops.push(...compactArrayOps(localOps));
-  return true;
 }
 
 function shouldUseLcsDiff(baseLength: number, nextLength: number, lcsMaxCells?: number): boolean {

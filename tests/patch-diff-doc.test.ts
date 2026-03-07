@@ -397,6 +397,32 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "/arr", value: [1, 4, 3] }]);
   });
 
+  it("supports a linear-space LCS array strategy for large localized edits", () => {
+    const baseArr = Array.from({ length: 2_500 }, (_, idx) => idx);
+    const nextArr = [...baseArr];
+    nextArr[1_250] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr/1250", value: -1 }]);
+  });
+
+  it("avoids atomic fallback for large unmatched windows with linear-space LCS", () => {
+    const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
+    const nextArr = [...baseArr.slice(1), baseArr[0]!];
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+
+    expect(ops).toEqual([
+      { op: "remove", path: "/arr/0" },
+      { op: "add", path: "/arr/3999", value: 0 },
+    ]);
+  });
+
   it("produces nested array paths with LCS", () => {
     const base: JsonValue = { obj: { arr: [1, 2] } };
     const next: JsonValue = { obj: { arr: [1, 3] } };
@@ -513,6 +539,34 @@ describe("diffJsonPatch", () => {
       const patch1 = diffJsonPatch(base, next, { arrayStrategy: "lcs" });
       const patch2 = diffJsonPatch(base, next, { arrayStrategy: "lcs" });
       expect(patch1).toEqual(patch2);
+    }
+  });
+
+  it("produces identical patches across repeated runs with linear-space LCS", () => {
+    const rng = new SeededRng(5_556);
+    for (let i = 0; i < 30; i++) {
+      const base = randomValue(rng, 3);
+      const next = randomValue(rng, 3);
+      const patch1 = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+      const patch2 = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+      expect(patch1).toEqual(patch2);
+    }
+  });
+
+  it("matches the classic LCS strategy for representative array edits", () => {
+    const cases: Array<[JsonValue, JsonValue]> = [
+      [{ arr: [1, 2] }, { arr: [1, 3] }],
+      [{ arr: [1, 2, 1, 2] }, { arr: [1, 2, 2] }],
+      [{ arr: [1, 2, 3] }, { arr: [2, 1, 3] }],
+      [{ arr: [1] }, { arr: [1, 2, 3] }],
+      [{ arr: [1, 2, 3] }, { arr: [2, 3] }],
+      [{ nested: { arr: ["a", "b", "c"] } }, { nested: { arr: ["a", "x", "c"] } }],
+    ];
+
+    for (const [base, next] of cases) {
+      expect(diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" })).toEqual(
+        diffJsonPatch(base, next, { arrayStrategy: "lcs" }),
+      );
     }
   });
 
@@ -1091,6 +1145,19 @@ describe("crdtToJsonPatch", () => {
     const head = docFromJsonWithDot({ arr: [1, 3] }, dot("A", 2));
     expect(crdtToJsonPatch(base, head, { arrayStrategy: "lcs" })).toEqual([
       { op: "replace", path: "/arr/1", value: 3 },
+    ]);
+  });
+
+  it("passes the linear-space array diff strategy through for array deltas", () => {
+    const baseJson = { arr: Array.from({ length: 2_500 }, (_, idx) => idx) };
+    const headJson = { arr: [...baseJson.arr] };
+    headJson.arr[1_250] = -1;
+
+    const base = docFromJsonWithDot(baseJson, dot("A", 1));
+    const head = docFromJsonWithDot(headJson, dot("A", 2));
+
+    expect(crdtToJsonPatch(base, head, { arrayStrategy: "lcs-linear" })).toEqual([
+      { op: "replace", path: "/arr/1250", value: -1 },
     ]);
   });
 
