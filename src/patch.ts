@@ -472,6 +472,16 @@ function buildArrayEditScriptLinearSpace(
     return;
   }
 
+  if (unmatchedBaseLength === 1) {
+    pushSingleBaseElementSteps(base, baseStart, next, nextStart, nextEnd, steps);
+    return;
+  }
+
+  if (unmatchedNextLength === 1) {
+    pushSingleNextElementSteps(base, baseStart, baseEnd, next, nextStart, steps);
+    return;
+  }
+
   if (shouldUseMatrixBaseCase(unmatchedBaseLength, unmatchedNextLength)) {
     steps.push(
       ...buildArrayEditScriptWithMatrix(base, baseStart, baseEnd, next, nextStart, nextEnd),
@@ -498,6 +508,96 @@ function buildArrayEditScriptLinearSpace(
   const nextMid = nextStart + bestOffset;
   buildArrayEditScriptLinearSpace(base, baseStart, baseMid, next, nextStart, nextMid, steps);
   buildArrayEditScriptLinearSpace(base, baseMid, baseEnd, next, nextMid, nextEnd, steps);
+}
+
+function pushSingleBaseElementSteps(
+  base: JsonValue[],
+  baseStart: number,
+  next: JsonValue[],
+  nextStart: number,
+  nextEnd: number,
+  steps: ArrayDiffStep[],
+): void {
+  const matchIndex = findFirstMatchingIndexInNext(base[baseStart]!, next, nextStart, nextEnd);
+
+  if (matchIndex === -1) {
+    steps.push({ kind: "remove" });
+
+    for (let nextIndex = nextStart; nextIndex < nextEnd; nextIndex++) {
+      steps.push({ kind: "add", value: next[nextIndex]! });
+    }
+    return;
+  }
+
+  for (let nextIndex = nextStart; nextIndex < matchIndex; nextIndex++) {
+    steps.push({ kind: "add", value: next[nextIndex]! });
+  }
+
+  steps.push({ kind: "equal" });
+
+  for (let nextIndex = matchIndex + 1; nextIndex < nextEnd; nextIndex++) {
+    steps.push({ kind: "add", value: next[nextIndex]! });
+  }
+}
+
+function pushSingleNextElementSteps(
+  base: JsonValue[],
+  baseStart: number,
+  baseEnd: number,
+  next: JsonValue[],
+  nextStart: number,
+  steps: ArrayDiffStep[],
+): void {
+  const matchIndex = findFirstMatchingIndexInBase(next[nextStart]!, base, baseStart, baseEnd);
+
+  if (matchIndex === -1) {
+    for (let baseIndex = baseStart; baseIndex < baseEnd; baseIndex++) {
+      steps.push({ kind: "remove" });
+    }
+
+    steps.push({ kind: "add", value: next[nextStart]! });
+    return;
+  }
+
+  for (let baseIndex = baseStart; baseIndex < matchIndex; baseIndex++) {
+    steps.push({ kind: "remove" });
+  }
+
+  steps.push({ kind: "equal" });
+
+  for (let baseIndex = matchIndex + 1; baseIndex < baseEnd; baseIndex++) {
+    steps.push({ kind: "remove" });
+  }
+}
+
+function findFirstMatchingIndexInNext(
+  target: JsonValue,
+  next: JsonValue[],
+  nextStart: number,
+  nextEnd: number,
+): number {
+  for (let nextIndex = nextStart; nextIndex < nextEnd; nextIndex++) {
+    if (jsonEquals(target, next[nextIndex]!)) {
+      return nextIndex;
+    }
+  }
+
+  return -1;
+}
+
+function findFirstMatchingIndexInBase(
+  target: JsonValue,
+  base: JsonValue[],
+  baseStart: number,
+  baseEnd: number,
+): number {
+  for (let baseIndex = baseStart; baseIndex < baseEnd; baseIndex++) {
+    if (jsonEquals(target, base[baseIndex]!)) {
+      return baseIndex;
+    }
+  }
+
+  return -1;
 }
 
 function shouldUseMatrixBaseCase(baseLength: number, nextLength: number): boolean {
