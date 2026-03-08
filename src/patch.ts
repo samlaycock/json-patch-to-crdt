@@ -221,6 +221,8 @@ export function compileJsonPatchOpToIntent(
  * By default arrays use a deterministic LCS strategy.
  * Pass `{ arrayStrategy: "atomic" }` for single-op array replacement.
  * Pass `{ arrayStrategy: "lcs-linear" }` for a lower-memory LCS variant.
+ * Note that `lcs-linear` still runs in `O(n * m)` time and does not have an
+ * automatic fallback for very large unmatched windows.
  * @param base - The original JSON value.
  * @param next - The target JSON value.
  * @param options - Diff options.
@@ -382,13 +384,15 @@ function diffArrayWithLcsMatrix(
     return true;
   }
 
-  const steps = buildArrayEditScriptWithMatrix(
+  const steps: ArrayDiffStep[] = [];
+  buildArrayEditScriptWithMatrix(
     base,
     baseStart,
     baseStart + n,
     next,
     nextStart,
     nextStart + m,
+    steps,
   );
   pushArrayPatchOps(path, window.prefixLength, steps, ops);
   return true;
@@ -483,9 +487,7 @@ function buildArrayEditScriptLinearSpace(
   }
 
   if (shouldUseMatrixBaseCase(unmatchedBaseLength, unmatchedNextLength)) {
-    steps.push(
-      ...buildArrayEditScriptWithMatrix(base, baseStart, baseEnd, next, nextStart, nextEnd),
-    );
+    buildArrayEditScriptWithMatrix(base, baseStart, baseEnd, next, nextStart, nextEnd, steps);
     return;
   }
 
@@ -611,7 +613,8 @@ function buildArrayEditScriptWithMatrix(
   next: JsonValue[],
   nextStart: number,
   nextEnd: number,
-): ArrayDiffStep[] {
+  steps: ArrayDiffStep[],
+): void {
   const unmatchedBaseLength = baseEnd - baseStart;
   const unmatchedNextLength = nextEnd - nextStart;
   const lcs: number[][] = Array.from({ length: unmatchedBaseLength + 1 }, () =>
@@ -631,7 +634,6 @@ function buildArrayEditScriptWithMatrix(
     }
   }
 
-  const steps: ArrayDiffStep[] = [];
   let baseOffset = 0;
   let nextOffset = 0;
 
@@ -664,8 +666,6 @@ function buildArrayEditScriptWithMatrix(
       baseOffset += 1;
     }
   }
-
-  return steps;
 }
 
 function computeLcsPrefixLengths(
