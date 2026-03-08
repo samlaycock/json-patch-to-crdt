@@ -1,5 +1,5 @@
 ---
-"json-patch-to-crdt": patch
+"json-patch-to-crdt": minor
 ---
 
 Add a new `arrayStrategy: "lcs-linear"` diff mode that uses a lower-memory linear-space LCS
