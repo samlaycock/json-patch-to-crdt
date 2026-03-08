@@ -382,6 +382,8 @@ export type DiffOptions = {
    * Array diff mode.
    * - `"lcs"` (default): index-level edits using LCS.
    * - `"lcs-linear"`: index-level edits using a lower-memory LCS variant.
+   *   This reduces memory use but still has `O(n * m)` time complexity and no
+   *   automatic fallback for very large unmatched windows.
    * - `"atomic"`: one-op root/field replacement for changed arrays.
    */
   arrayStrategy?: "atomic" | "lcs" | "lcs-linear";
