@@ -85,6 +85,15 @@ console.log(delta);
 //   { op: "add", path: "/profile/active", value: true },
 //   { op: "add", path: "/tags/1", value: "b" }
 // ]
+
+const reordered = diffJsonPatch(
+  { tags: ["a", "b", "c"] },
+  { tags: ["b", "a", "c"] },
+  { arrayStrategy: "lcs", emitMoves: true },
+);
+
+console.log(reordered);
+// [{ op: "move", from: "/tags/0", path: "/tags/1" }]
 ```
 
 For array-heavy snapshots, `diffJsonPatch` and `crdtToJsonPatch` support:
@@ -94,6 +103,10 @@ For array-heavy snapshots, `diffJsonPatch` and `crdtToJsonPatch` support:
 - `arrayStrategy: "atomic"`: replace the whole array with a single patch operation.
 
 `lcsMaxCells` only applies to `arrayStrategy: "lcs"`. If the classic LCS matrix would exceed the configured cap, the diff falls back to an atomic array `replace`. Use `lcs-linear` when you want index-level patches for larger arrays without allocating the full matrix, but note that it still has `O(n * m)` time complexity and does not automatically fall back for very large unmatched windows.
+
+`diffJsonPatch` keeps the existing `add`/`remove`/`replace` output by default. Set
+`emitMoves` and/or `emitCopies` to opt into deterministic RFC 6902 `move`/`copy`
+rewrites.
 
 ## Serialize / Restore State
 

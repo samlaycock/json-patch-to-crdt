@@ -481,6 +481,87 @@ describe("diffJsonPatch", () => {
     ]);
   });
 
+  it("can emit move operations for array reorders when enabled", () => {
+    const base: JsonValue = { arr: [1, 2, 3] };
+    const next: JsonValue = { arr: [2, 1, 3] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitMoves: true,
+    });
+
+    expect(ops).toEqual([{ op: "move", from: "/arr/0", path: "/arr/1" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("can emit forward move operations for array reorders when enabled", () => {
+    const base: JsonValue = { arr: [1, 2, 3] };
+    const next: JsonValue = { arr: [3, 1, 2] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitMoves: true,
+    });
+
+    expect(ops).toEqual([{ op: "move", from: "/arr/2", path: "/arr/0" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("can emit move operations with the linear LCS array strategy", () => {
+    const base: JsonValue = { arr: [1, 2, 3] };
+    const next: JsonValue = { arr: [3, 1, 2] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs-linear",
+      emitMoves: true,
+    });
+
+    expect(ops).toEqual([{ op: "move", from: "/arr/2", path: "/arr/0" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("can emit move operations for object renames when enabled", () => {
+    const base: JsonValue = { before: 1 };
+    const next: JsonValue = { after: 1 };
+    const ops = diffJsonPatch(base, next, { emitMoves: true });
+
+    expect(ops).toEqual([{ op: "move", from: "/before", path: "/after" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("can emit copy operations when duplicating existing values", () => {
+    const base: JsonValue = { arr: [1] };
+    const next: JsonValue = { arr: [1, 1] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([{ op: "copy", from: "/arr/0", path: "/arr/1" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("prefers deterministic earliest copy sources for duplicates", () => {
+    const base: JsonValue = { arr: [1, 1] };
+    const next: JsonValue = { arr: [1, 1, 1] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([{ op: "copy", from: "/arr/0", path: "/arr/2" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("prefers move over copy when both options are enabled", () => {
+    const base: JsonValue = { a: 1, b: 1 };
+    const next: JsonValue = { b: 1, c: 1 };
+    const ops = diffJsonPatch(base, next, {
+      emitMoves: true,
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([{ op: "move", from: "/a", path: "/c" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
   it("can append elements with LCS", () => {
     const base: JsonValue = { arr: [1] };
     const next: JsonValue = { arr: [1, 2, 3] };
