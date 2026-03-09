@@ -396,6 +396,16 @@ export type DiffOptions = {
    */
   lcsMaxCells?: number;
   /**
+   * Emit RFC 6902 `move` operations when a deterministic remove/add rewrite is available.
+   * Defaults to `false` for backward compatibility.
+   */
+  emitMoves?: boolean;
+  /**
+   * Emit RFC 6902 `copy` operations when a deterministic existing-value source is available.
+   * Defaults to `false` for backward compatibility.
+   */
+  emitCopies?: boolean;
+  /**
    * Runtime guardrails for diff inputs from untyped callers.
    * Defaults to `"none"` for backward compatibility.
    */

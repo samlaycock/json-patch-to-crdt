@@ -79,6 +79,18 @@ export function applyJsonPatch(base: JsonValue, patch: JsonPatchOp[]): JsonValue
   let doc: JsonValue = cloneJson(base);
 
   for (const op of patch) {
+    if (op.op === "copy" || op.op === "move") {
+      const fromPath = parseJsonPointer(op.from);
+      const value = cloneJson(fromPath.length === 0 ? doc : getAtJson(doc, fromPath));
+
+      if (op.op === "move") {
+        doc = applyJsonPatch(doc, [{ op: "remove", path: op.from }]);
+      }
+
+      doc = applyJsonPatch(doc, [{ op: "add", path: op.path, value }]);
+      continue;
+    }
+
     const path = parseJsonPointer(op.path);
     if (path.length === 0) {
       if (op.op === "remove") {

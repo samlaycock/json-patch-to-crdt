@@ -223,6 +223,8 @@ export function compileJsonPatchOpToIntent(
  * Pass `{ arrayStrategy: "lcs-linear" }` for a lower-memory LCS variant.
  * Note that `lcs-linear` still runs in `O(n * m)` time and does not have an
  * automatic fallback for very large unmatched windows.
+ * Pass `{ emitMoves: true }` or `{ emitCopies: true }` to opt into RFC 6902
+ * move/copy emission when a deterministic rewrite is available.
  * @param base - The original JSON value.
  * @param next - The target JSON value.
  * @param options - Diff options.
@@ -257,14 +259,14 @@ function diffValue(
     const arrayStrategy = options.arrayStrategy ?? "lcs";
 
     if (arrayStrategy === "lcs" && Array.isArray(base) && Array.isArray(next)) {
-      if (!diffArrayWithLcsMatrix(path, base, next, ops, options.lcsMaxCells)) {
+      if (!diffArrayWithLcsMatrix(path, base, next, ops, options)) {
         ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
       }
       return;
     }
 
     if (arrayStrategy === "lcs-linear" && Array.isArray(base) && Array.isArray(next)) {
-      diffArrayWithLinearLcs(path, base, next, ops);
+      diffArrayWithLinearLcs(path, base, next, ops, options);
       return;
     }
 
@@ -289,7 +291,9 @@ function diffObject(
 ): void {
   const baseKeys = Object.keys(base).sort();
   const nextKeys = Object.keys(next).sort();
+  const baseOnlyKeys: string[] = [];
   const nextOnlyKeys: string[] = [];
+  const sharedKeys: string[] = [];
 
   let baseIndex = 0;
   let nextIndex = 0;
@@ -299,15 +303,14 @@ function diffObject(
     const nextKey = nextKeys[nextIndex]!;
 
     if (baseKey === nextKey) {
+      sharedKeys.push(baseKey);
       baseIndex += 1;
       nextIndex += 1;
       continue;
     }
 
     if (baseKey < nextKey) {
-      path.push(baseKey);
-      ops.push({ op: "remove", path: stringifyJsonPointer(path) });
-      path.pop();
+      baseOnlyKeys.push(baseKey);
       baseIndex += 1;
       continue;
     }
@@ -317,10 +320,7 @@ function diffObject(
   }
 
   while (baseIndex < baseKeys.length) {
-    const baseKey = baseKeys[baseIndex]!;
-    path.push(baseKey);
-    ops.push({ op: "remove", path: stringifyJsonPointer(path) });
-    path.pop();
+    baseOnlyKeys.push(baseKeys[baseIndex]!);
     baseIndex += 1;
   }
 
@@ -329,38 +329,128 @@ function diffObject(
     nextIndex += 1;
   }
 
-  for (const nextKey of nextOnlyKeys) {
-    path.push(nextKey);
-    ops.push({
-      op: "add",
-      path: stringifyJsonPointer(path),
-      value: next[nextKey]!,
-    });
+  emitObjectStructuralOps(path, base, next, baseOnlyKeys, nextOnlyKeys, ops, options);
+
+  for (const key of sharedKeys) {
+    path.push(key);
+    diffValue(path, base[key]!, next[key]!, ops, options);
     path.pop();
   }
+}
 
-  baseIndex = 0;
-  nextIndex = 0;
-  while (baseIndex < baseKeys.length && nextIndex < nextKeys.length) {
-    const baseKey = baseKeys[baseIndex]!;
-    const nextKey = nextKeys[nextIndex]!;
-
-    if (baseKey === nextKey) {
+function emitObjectStructuralOps(
+  path: string[],
+  base: Record<string, JsonValue>,
+  next: Record<string, JsonValue>,
+  baseOnlyKeys: string[],
+  nextOnlyKeys: string[],
+  ops: JsonPatchOp[],
+  options: DiffOptions,
+): void {
+  if (!options.emitMoves && !options.emitCopies) {
+    for (const baseKey of baseOnlyKeys) {
       path.push(baseKey);
-      diffValue(path, base[baseKey]!, next[nextKey]!, ops, options);
+      ops.push({ op: "remove", path: stringifyJsonPointer(path) });
       path.pop();
-      baseIndex += 1;
-      nextIndex += 1;
-      continue;
     }
 
-    if (baseKey < nextKey) {
-      baseIndex += 1;
-      continue;
+    for (const nextKey of nextOnlyKeys) {
+      path.push(nextKey);
+      ops.push({
+        op: "add",
+        path: stringifyJsonPointer(path),
+        value: next[nextKey]!,
+      });
+      path.pop();
     }
 
-    nextIndex += 1;
+    return;
   }
+
+  const matchedMoveSources = new Set<string>();
+  const moveTargets = new Map<string, string>();
+  if (options.emitMoves) {
+    for (const nextKey of nextOnlyKeys) {
+      for (const baseKey of baseOnlyKeys) {
+        if (matchedMoveSources.has(baseKey)) {
+          continue;
+        }
+
+        if (!jsonEquals(base[baseKey]!, next[nextKey]!)) {
+          continue;
+        }
+
+        matchedMoveSources.add(baseKey);
+        moveTargets.set(nextKey, baseKey);
+        break;
+      }
+    }
+  }
+
+  const availableSources = new Map<string, JsonValue>();
+  for (const key of Object.keys(base).sort()) {
+    availableSources.set(key, base[key]!);
+  }
+
+  for (const nextKey of nextOnlyKeys) {
+    path.push(nextKey);
+    const targetPath = stringifyJsonPointer(path);
+    path.pop();
+
+    const moveSource = moveTargets.get(nextKey);
+    if (moveSource !== undefined) {
+      path.push(moveSource);
+      const fromPath = stringifyJsonPointer(path);
+      path.pop();
+      ops.push({ op: "move", from: fromPath, path: targetPath });
+      availableSources.delete(moveSource);
+      availableSources.set(nextKey, next[nextKey]!);
+      continue;
+    }
+
+    if (options.emitCopies) {
+      const copySource = findObjectCopySource(availableSources, next[nextKey]!);
+      if (copySource !== undefined) {
+        path.push(copySource);
+        const fromPath = stringifyJsonPointer(path);
+        path.pop();
+        ops.push({ op: "copy", from: fromPath, path: targetPath });
+        availableSources.set(nextKey, next[nextKey]!);
+        continue;
+      }
+    }
+
+    ops.push({
+      op: "add",
+      path: targetPath,
+      value: next[nextKey]!,
+    });
+    availableSources.set(nextKey, next[nextKey]!);
+  }
+
+  for (const baseKey of baseOnlyKeys) {
+    if (matchedMoveSources.has(baseKey)) {
+      continue;
+    }
+
+    path.push(baseKey);
+    ops.push({ op: "remove", path: stringifyJsonPointer(path) });
+    path.pop();
+  }
+}
+
+function findObjectCopySource(
+  availableSources: ReadonlyMap<string, JsonValue>,
+  target: JsonValue,
+): string | undefined {
+  const sortedKeys = Array.from(availableSources.keys()).sort();
+  for (const key of sortedKeys) {
+    if (jsonEquals(availableSources.get(key)!, target)) {
+      return key;
+    }
+  }
+
+  return undefined;
 }
 
 function diffArrayWithLcsMatrix(
@@ -368,7 +458,7 @@ function diffArrayWithLcsMatrix(
   base: JsonValue[],
   next: JsonValue[],
   ops: JsonPatchOp[],
-  lcsMaxCells?: number,
+  options: DiffOptions,
 ): boolean {
   const window = trimEqualArrayEdges(base, next);
   const baseStart = window.baseStart;
@@ -376,7 +466,7 @@ function diffArrayWithLcsMatrix(
   const n = window.unmatchedBaseLength;
   const m = window.unmatchedNextLength;
 
-  if (!shouldUseLcsDiff(n, m, lcsMaxCells)) {
+  if (!shouldUseLcsDiff(n, m, options.lcsMaxCells)) {
     return false;
   }
 
@@ -394,7 +484,7 @@ function diffArrayWithLcsMatrix(
     nextStart + m,
     steps,
   );
-  pushArrayPatchOps(path, window.prefixLength, steps, ops);
+  pushArrayPatchOps(path, window.prefixLength, steps, ops, base, options);
   return true;
 }
 
@@ -403,6 +493,7 @@ function diffArrayWithLinearLcs(
   base: JsonValue[],
   next: JsonValue[],
   ops: JsonPatchOp[],
+  options: DiffOptions,
 ): void {
   const window = trimEqualArrayEdges(base, next);
   const steps: ArrayDiffStep[] = [];
@@ -416,7 +507,7 @@ function diffArrayWithLinearLcs(
     steps,
   );
 
-  pushArrayPatchOps(path, window.prefixLength, steps, ops);
+  pushArrayPatchOps(path, window.prefixLength, steps, ops, base, options);
 }
 
 function trimEqualArrayEdges(base: JsonValue[], next: JsonValue[]): TrimmedArrayWindow {
@@ -736,6 +827,8 @@ function pushArrayPatchOps(
   startIndex: number,
   steps: ArrayDiffStep[],
   ops: JsonPatchOp[],
+  base: JsonValue[],
+  options: DiffOptions,
 ): void {
   const localOps: JsonPatchOp[] = [];
   let index = startIndex;
@@ -767,7 +860,7 @@ function pushArrayPatchOps(
     path.pop();
   }
 
-  ops.push(...compactArrayOps(localOps));
+  ops.push(...finalizeArrayOps(path, base, localOps, options));
 }
 
 function shouldUseLcsDiff(baseLength: number, nextLength: number, lcsMaxCells?: number): boolean {
@@ -782,6 +875,86 @@ function shouldUseLcsDiff(baseLength: number, nextLength: number, lcsMaxCells?: 
 
   const matrixCells = (baseLength + 1) * (nextLength + 1);
   return matrixCells <= cap;
+}
+
+function finalizeArrayOps(
+  arrayPath: string[],
+  base: JsonValue[],
+  ops: JsonPatchOp[],
+  options: DiffOptions,
+): JsonPatchOp[] {
+  if (!options.emitMoves && !options.emitCopies) {
+    return compactArrayOps(ops);
+  }
+
+  const out: JsonPatchOp[] = [];
+  const working = structuredClone(base);
+
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]!;
+    const next = ops[i + 1];
+
+    if (op.op === "remove" && next && next.op === "add") {
+      const removedValue = working[getArrayOpIndex(op.path, arrayPath)]!;
+
+      if (op.path === next.path) {
+        const replaceOp: JsonPatchOp = { op: "replace", path: op.path, value: next.value };
+        out.push(replaceOp);
+        applyArrayOptimizationOp(working, replaceOp, arrayPath);
+        i += 1;
+        continue;
+      }
+
+      if (options.emitMoves && jsonEquals(removedValue, next.value)) {
+        const moveOp: JsonPatchOp = { op: "move", from: op.path, path: next.path };
+        out.push(moveOp);
+        applyArrayOptimizationOp(working, moveOp, arrayPath);
+        i += 1;
+        continue;
+      }
+    }
+
+    if (op.op === "add" && next && next.op === "remove" && options.emitMoves) {
+      const targetIndex = getArrayOpIndex(op.path, arrayPath);
+      const removeIndex = getArrayOpIndex(next.path, arrayPath);
+      const sourceIndex = removeIndex - (targetIndex <= removeIndex ? 1 : 0);
+
+      if (
+        sourceIndex >= 0 &&
+        sourceIndex < working.length &&
+        jsonEquals(working[sourceIndex]!, op.value)
+      ) {
+        const moveOp: JsonPatchOp = {
+          op: "move",
+          from: stringifyJsonPointer([...arrayPath, String(sourceIndex)]),
+          path: op.path,
+        };
+        out.push(moveOp);
+        applyArrayOptimizationOp(working, moveOp, arrayPath);
+        i += 1;
+        continue;
+      }
+    }
+
+    if (op.op === "add" && options.emitCopies) {
+      const copySourceIndex = findArrayCopySourceIndex(working, op.value);
+      if (copySourceIndex !== -1) {
+        const copyOp: JsonPatchOp = {
+          op: "copy",
+          from: stringifyJsonPointer([...arrayPath, String(copySourceIndex)]),
+          path: op.path,
+        };
+        out.push(copyOp);
+        applyArrayOptimizationOp(working, copyOp, arrayPath);
+        continue;
+      }
+    }
+
+    out.push(op);
+    applyArrayOptimizationOp(working, op, arrayPath);
+  }
+
+  return out;
 }
 
 function compactArrayOps(ops: JsonPatchOp[]): JsonPatchOp[] {
@@ -801,6 +974,70 @@ function compactArrayOps(ops: JsonPatchOp[]): JsonPatchOp[] {
   }
 
   return out;
+}
+
+function findArrayCopySourceIndex(working: JsonValue[], value: JsonValue): number {
+  for (let index = 0; index < working.length; index++) {
+    if (jsonEquals(working[index]!, value)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function getArrayOpIndex(ptr: string, arrayPath: string[]): number {
+  const parsed = parseJsonPointer(ptr);
+  if (parsed.length !== arrayPath.length + 1) {
+    throw new Error(`Expected array operation under ${stringifyJsonPointer(arrayPath)}: ${ptr}`);
+  }
+
+  for (let index = 0; index < arrayPath.length; index++) {
+    if (parsed[index] !== arrayPath[index]) {
+      throw new Error(`Expected array operation under ${stringifyJsonPointer(arrayPath)}: ${ptr}`);
+    }
+  }
+
+  const token = parsed[arrayPath.length]!;
+  if (!ARRAY_INDEX_TOKEN_PATTERN.test(token)) {
+    throw new Error(`Expected numeric array index at ${ptr}`);
+  }
+
+  return Number(token);
+}
+
+function applyArrayOptimizationOp(
+  working: JsonValue[],
+  op: JsonPatchOp,
+  arrayPath: string[],
+): void {
+  if (op.op === "add") {
+    working.splice(getArrayOpIndex(op.path, arrayPath), 0, structuredClone(op.value));
+    return;
+  }
+
+  if (op.op === "remove") {
+    working.splice(getArrayOpIndex(op.path, arrayPath), 1);
+    return;
+  }
+
+  if (op.op === "replace") {
+    working[getArrayOpIndex(op.path, arrayPath)] = structuredClone(op.value);
+    return;
+  }
+
+  if (op.op === "copy") {
+    const value = structuredClone(working[getArrayOpIndex(op.from, arrayPath)]!);
+    working.splice(getArrayOpIndex(op.path, arrayPath), 0, value);
+    return;
+  }
+
+  if (op.op === "move") {
+    const fromIndex = getArrayOpIndex(op.from, arrayPath);
+    const [value] = working.splice(fromIndex, 1);
+    working.splice(getArrayOpIndex(op.path, arrayPath), 0, value!);
+    return;
+  }
 }
 
 function escapeJsonPointer(token: string): string {
