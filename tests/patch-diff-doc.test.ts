@@ -559,6 +559,36 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("can emit multiple copy operations in a single array diff", () => {
+    const base: JsonValue = { arr: [1, 2] };
+    const next: JsonValue = { arr: [1, 1, 2, 2] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([
+      { op: "copy", from: "/arr/0", path: "/arr/1" },
+      { op: "copy", from: "/arr/2", path: "/arr/2" },
+    ]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("does not rewrite matched remove/add pairs into copy when moves are disabled", () => {
+    const base: JsonValue = { arr: [1, 2, 1] };
+    const next: JsonValue = { arr: [2, 1, 1] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([
+      { op: "remove", path: "/arr/0" },
+      { op: "add", path: "/arr/1", value: 1 },
+    ]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
   it("prefers move over copy when both options are enabled", () => {
     const base: JsonValue = { a: 1, b: 1 };
     const next: JsonValue = { b: 1, c: 1 };
