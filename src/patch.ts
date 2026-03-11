@@ -389,10 +389,6 @@ function emitObjectStructuralOps(
 
       while (bucket.length > 0) {
         const candidate = bucket.shift()!;
-        if (matchedMoveSources.has(candidate)) {
-          continue;
-        }
-
         if (!jsonEquals(base[candidate]!, next[nextKey]!)) {
           continue;
         }
@@ -406,6 +402,10 @@ function emitObjectStructuralOps(
 
   const availableSources = new Map<string, JsonValue>();
   for (const key of Object.keys(base).sort()) {
+    if (hasOwn(next, key) && !jsonEquals(base[key]!, next[key]!)) {
+      continue;
+    }
+
     availableSources.set(key, base[key]!);
   }
 
@@ -945,12 +945,13 @@ function finalizeArrayOps(
       }
     }
 
-    if (op.op === "add" && next && next.op === "remove" && options.emitMoves) {
+    if (op.op === "add" && next && next.op === "remove") {
       const targetIndex = getArrayOpIndex(op.path, arrayPath);
       const removeIndex = getArrayOpIndex(next.path, arrayPath);
       const sourceIndex = removeIndex - (targetIndex <= removeIndex ? 1 : 0);
 
       if (
+        options.emitMoves &&
         sourceIndex >= 0 &&
         sourceIndex < working.length &&
         jsonEquals(working[sourceIndex]!, op.value)
@@ -965,6 +966,15 @@ function finalizeArrayOps(
         i += 1;
         continue;
       }
+
+      // Keep unmatched add/remove pairs together so copy detection cannot pick
+      // a source from stale pre-remove state.
+      out.push(op);
+      applyArrayOptimizationOp(working, op, arrayPath);
+      out.push(next);
+      applyArrayOptimizationOp(working, next, arrayPath);
+      i += 1;
+      continue;
     }
 
     if (op.op === "add" && options.emitCopies) {

@@ -79,86 +79,87 @@ export function applyJsonPatch(base: JsonValue, patch: JsonPatchOp[]): JsonValue
   let doc: JsonValue = cloneJson(base);
 
   for (const op of patch) {
-    if (op.op === "copy" || op.op === "move") {
-      const fromPath = parseJsonPointer(op.from);
-      const value = cloneJson(fromPath.length === 0 ? doc : getAtJson(doc, fromPath));
-
-      if (op.op === "move") {
-        doc = applyJsonPatch(doc, [{ op: "remove", path: op.from }]);
-      }
-
-      doc = applyJsonPatch(doc, [{ op: "add", path: op.path, value }]);
-      continue;
-    }
-
-    const path = parseJsonPointer(op.path);
-    if (path.length === 0) {
-      if (op.op === "remove") {
-        doc = null;
-        continue;
-      }
-      if (op.op === "add" || op.op === "replace") {
-        doc = cloneJson(op.value);
-        continue;
-      }
-      throw new Error(`Unsupported op ${op.op} at root`);
-    }
-
-    const parentPath = path.slice(0, -1);
-    const key = path[path.length - 1]!;
-    const parent = getAtJson(doc, parentPath);
-
-    if (Array.isArray(parent)) {
-      const idx = key === "-" ? parent.length : Number(key);
-      if (!Number.isInteger(idx)) {
-        throw new Error(`Invalid array index ${key}`);
-      }
-
-      if (op.op === "add") {
-        if (idx < 0 || idx > parent.length) {
-          throw new Error(`Index out of bounds ${idx}`);
-        }
-        parent.splice(idx, 0, cloneJson(op.value));
-        continue;
-      }
-
-      if (op.op === "remove") {
-        if (idx < 0 || idx >= parent.length) {
-          throw new Error(`Index out of bounds ${idx}`);
-        }
-        parent.splice(idx, 1);
-        continue;
-      }
-
-      if (op.op === "replace") {
-        if (idx < 0 || idx >= parent.length) {
-          throw new Error(`Index out of bounds ${idx}`);
-        }
-        parent[idx] = cloneJson(op.value);
-        continue;
-      }
-
-      throw new Error(`Unsupported op ${op.op} for array`);
-    }
-
-    if (!parent || typeof parent !== "object") {
-      throw new Error("Parent is not a container");
-    }
-
-    const obj = parent as Record<string, JsonValue>;
-    if (op.op === "add" || op.op === "replace") {
-      obj[key] = cloneJson(op.value);
-      continue;
-    }
-    if (op.op === "remove") {
-      delete obj[key];
-      continue;
-    }
-
-    throw new Error(`Unsupported op ${op.op} for object`);
+    doc = applyJsonPatchOp(doc, op);
   }
 
   return doc;
+}
+
+function applyJsonPatchOp(doc: JsonValue, op: JsonPatchOp): JsonValue {
+  if (op.op === "copy" || op.op === "move") {
+    const fromPath = parseJsonPointer(op.from);
+    const value = cloneJson(fromPath.length === 0 ? doc : getAtJson(doc, fromPath));
+    const docAfterRemove =
+      op.op === "move" ? applyJsonPatchOp(doc, { op: "remove", path: op.from }) : doc;
+    return applyJsonPatchOp(docAfterRemove, { op: "add", path: op.path, value });
+  }
+
+  const path = parseJsonPointer(op.path);
+  if (path.length === 0) {
+    if (op.op === "remove") {
+      return null;
+    }
+
+    if (op.op === "add" || op.op === "replace") {
+      return cloneJson(op.value);
+    }
+
+    throw new Error(`Unsupported op ${op.op} at root`);
+  }
+
+  const parentPath = path.slice(0, -1);
+  const key = path[path.length - 1]!;
+  const parent = getAtJson(doc, parentPath);
+
+  if (Array.isArray(parent)) {
+    const idx = key === "-" ? parent.length : Number(key);
+    if (!Number.isInteger(idx)) {
+      throw new Error(`Invalid array index ${key}`);
+    }
+
+    if (op.op === "add") {
+      if (idx < 0 || idx > parent.length) {
+        throw new Error(`Index out of bounds ${idx}`);
+      }
+      parent.splice(idx, 0, cloneJson(op.value));
+      return doc;
+    }
+
+    if (op.op === "remove") {
+      if (idx < 0 || idx >= parent.length) {
+        throw new Error(`Index out of bounds ${idx}`);
+      }
+      parent.splice(idx, 1);
+      return doc;
+    }
+
+    if (op.op === "replace") {
+      if (idx < 0 || idx >= parent.length) {
+        throw new Error(`Index out of bounds ${idx}`);
+      }
+      parent[idx] = cloneJson(op.value);
+      return doc;
+    }
+
+    throw new Error(`Unsupported op ${op.op} for array`);
+  }
+
+  if (!parent || typeof parent !== "object") {
+    throw new Error("Parent is not a container");
+  }
+
+  const obj = parent as Record<string, JsonValue>;
+  if (op.op === "add" || op.op === "replace") {
+    obj[key] = cloneJson(op.value);
+    return doc;
+  }
+
+  if (op.op === "remove") {
+    delete obj[key];
+    return doc;
+  }
+
+  throw new Error(`Unsupported op ${op.op} for object`);
 }
 
 export class SeededRng {
