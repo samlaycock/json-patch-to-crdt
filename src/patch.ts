@@ -943,6 +943,10 @@ function finalizeArrayOps(
         i += 1;
         continue;
       }
+
+      out.push(op);
+      applyArrayOptimizationOp(working, op, arrayPath);
+      continue;
     }
 
     if (op.op === "add" && next && next.op === "remove") {
@@ -1092,6 +1096,8 @@ function applyArrayOptimizationOp(
     working.splice(getArrayOpIndex(op.path, arrayPath), 0, value!);
     return;
   }
+
+  throw new Error(`applyArrayOptimizationOp: unexpected op type "${op.op}"`);
 }
 
 function escapeJsonPointer(token: string): string {
