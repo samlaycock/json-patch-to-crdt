@@ -370,18 +370,35 @@ function emitObjectStructuralOps(
   const matchedMoveSources = new Set<string>();
   const moveTargets = new Map<string, string>();
   if (options.emitMoves) {
+    const moveSourceBuckets = new Map<string, string[]>();
+    for (const baseKey of baseOnlyKeys) {
+      const bucketKey = stableJsonValueKey(base[baseKey]!);
+      const bucket = moveSourceBuckets.get(bucketKey);
+      if (bucket) {
+        bucket.push(baseKey);
+      } else {
+        moveSourceBuckets.set(bucketKey, [baseKey]);
+      }
+    }
+
     for (const nextKey of nextOnlyKeys) {
-      for (const baseKey of baseOnlyKeys) {
-        if (matchedMoveSources.has(baseKey)) {
+      const bucket = moveSourceBuckets.get(stableJsonValueKey(next[nextKey]!));
+      if (!bucket) {
+        continue;
+      }
+
+      while (bucket.length > 0) {
+        const candidate = bucket.shift()!;
+        if (matchedMoveSources.has(candidate)) {
           continue;
         }
 
-        if (!jsonEquals(base[baseKey]!, next[nextKey]!)) {
+        if (!jsonEquals(base[candidate]!, next[nextKey]!)) {
           continue;
         }
 
-        matchedMoveSources.add(baseKey);
-        moveTargets.set(nextKey, baseKey);
+        matchedMoveSources.add(candidate);
+        moveTargets.set(nextKey, candidate);
         break;
       }
     }
@@ -883,6 +900,10 @@ function finalizeArrayOps(
   ops: JsonPatchOp[],
   options: DiffOptions,
 ): JsonPatchOp[] {
+  if (ops.length === 0) {
+    return [];
+  }
+
   if (!options.emitMoves && !options.emitCopies) {
     return compactArrayOps(ops);
   }
@@ -896,6 +917,7 @@ function finalizeArrayOps(
 
     if (op.op === "remove" && next && next.op === "add") {
       const removedValue = working[getArrayOpIndex(op.path, arrayPath)]!;
+      const valuesMatch = jsonEquals(removedValue, next.value);
 
       if (op.path === next.path) {
         const replaceOp: JsonPatchOp = { op: "replace", path: op.path, value: next.value };
@@ -905,10 +927,19 @@ function finalizeArrayOps(
         continue;
       }
 
-      if (options.emitMoves && jsonEquals(removedValue, next.value)) {
+      if (options.emitMoves && valuesMatch) {
         const moveOp: JsonPatchOp = { op: "move", from: op.path, path: next.path };
         out.push(moveOp);
         applyArrayOptimizationOp(working, moveOp, arrayPath);
+        i += 1;
+        continue;
+      }
+
+      if (valuesMatch) {
+        out.push(op);
+        applyArrayOptimizationOp(working, op, arrayPath);
+        out.push(next);
+        applyArrayOptimizationOp(working, next, arrayPath);
         i += 1;
         continue;
       }
@@ -955,6 +986,19 @@ function finalizeArrayOps(
   }
 
   return out;
+}
+
+function stableJsonValueKey(value: JsonValue): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJsonValueKey).join(",")}]`;
+  }
+
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJsonValueKey(value[key]!)}`).join(",")}}`;
 }
 
 function compactArrayOps(ops: JsonPatchOp[]): JsonPatchOp[] {
