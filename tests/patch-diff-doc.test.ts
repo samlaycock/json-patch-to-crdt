@@ -538,6 +538,15 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("can emit copy operations for object key duplication when enabled", () => {
+    const base: JsonValue = { a: 1 };
+    const next: JsonValue = { a: 1, b: 1 };
+    const ops = diffJsonPatch(base, next, { emitCopies: true });
+
+    expect(ops).toEqual([{ op: "copy", from: "/a", path: "/b" }]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
   it("prefers deterministic earliest copy sources for duplicates", () => {
     const base: JsonValue = { arr: [1, 1] };
     const next: JsonValue = { arr: [1, 1, 1] };
