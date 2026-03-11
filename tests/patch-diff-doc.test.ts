@@ -547,6 +547,18 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("prefers stable shared object copy sources over keys that will change", () => {
+    const base: JsonValue = { banner: "dark", theme: "dark" };
+    const next: JsonValue = { banner: "dark", sidebar: "dark", theme: "light" };
+    const ops = diffJsonPatch(base, next, { emitCopies: true });
+
+    expect(ops).toEqual([
+      { op: "copy", from: "/banner", path: "/sidebar" },
+      { op: "replace", path: "/theme", value: "light" },
+    ]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
   it("prefers deterministic earliest copy sources for duplicates", () => {
     const base: JsonValue = { arr: [1, 1] };
     const next: JsonValue = { arr: [1, 1, 1] };
@@ -585,6 +597,22 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([
       { op: "remove", path: "/arr/0" },
       { op: "add", path: "/arr/1", value: 1 },
+    ]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("does not rewrite unmatched add/remove pairs into copy when a remove is still pending", () => {
+    const base: JsonValue = { arr: [0, 0, 1, 0] };
+    const next: JsonValue = { arr: [1, 0, 0, 1] };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitMoves: true,
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([
+      { op: "add", path: "/arr/0", value: 1 },
+      { op: "remove", path: "/arr/4" },
     ]);
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
