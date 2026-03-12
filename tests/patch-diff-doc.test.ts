@@ -547,6 +547,18 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("does not rewrite object renames into copy when moves are disabled", () => {
+    const base: JsonValue = { a: 1 };
+    const next: JsonValue = { b: 1 };
+    const ops = diffJsonPatch(base, next, { emitCopies: true });
+
+    expect(ops).toEqual([
+      { op: "add", path: "/b", value: 1 },
+      { op: "remove", path: "/a" },
+    ]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
   it("prefers stable shared object copy sources over keys that will change", () => {
     const base: JsonValue = { banner: "dark", theme: "dark" };
     const next: JsonValue = { banner: "dark", sidebar: "dark", theme: "light" };
