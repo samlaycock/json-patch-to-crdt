@@ -402,7 +402,11 @@ function emitObjectStructuralOps(
 
   const availableSources = new Map<string, JsonValue>();
   for (const key of Object.keys(base).sort()) {
-    if (hasOwn(next, key) && !jsonEquals(base[key]!, next[key]!)) {
+    if (!hasOwn(next, key)) {
+      continue;
+    }
+
+    if (!jsonEquals(base[key]!, next[key]!)) {
       continue;
     }
 
