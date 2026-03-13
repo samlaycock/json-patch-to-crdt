@@ -912,7 +912,7 @@ function finalizeArrayOps(
   }
 
   const out: JsonPatchOp[] = [];
-  const working = structuredClone(base);
+  const working = base.slice();
 
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i]!;
@@ -1088,7 +1088,14 @@ function applyArrayOptimizationOp(
   }
 
   if (op.op === "copy") {
-    const value = structuredClone(working[getArrayOpIndex(op.from, arrayPath)]!);
+    const fromIndex = getArrayOpIndex(op.from, arrayPath);
+    if (fromIndex < 0 || fromIndex >= working.length) {
+      throw new Error(
+        `applyArrayOptimizationOp: copy from index ${fromIndex} is out of bounds (length ${working.length})`,
+      );
+    }
+
+    const value = structuredClone(working[fromIndex]!);
     working.splice(getArrayOpIndex(op.path, arrayPath), 0, value);
     return;
   }
