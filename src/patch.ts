@@ -424,7 +424,6 @@ function emitObjectStructuralOps(
       const fromPath = stringifyJsonPointer(path);
       path.pop();
       ops.push({ op: "move", from: fromPath, path: targetPath });
-      availableSources.delete(moveSource);
       availableSources.set(nextKey, next[nextKey]!);
       continue;
     }
