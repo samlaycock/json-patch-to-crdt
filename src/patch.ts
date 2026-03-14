@@ -424,7 +424,11 @@ function emitObjectStructuralOps(
     }
 
     if (options.emitCopies) {
-      const copySource = findObjectCopySource(availableSourceKeys, availableSources, next[nextKey]!);
+      const copySource = findObjectCopySource(
+        availableSourceKeys,
+        availableSources,
+        next[nextKey]!,
+      );
       if (copySource !== undefined) {
         path.push(copySource);
         const fromPath = stringifyJsonPointer(path);
