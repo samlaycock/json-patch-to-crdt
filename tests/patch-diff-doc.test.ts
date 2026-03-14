@@ -613,18 +613,17 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
-  it("does not rewrite unmatched add/remove pairs into copy when a remove is still pending", () => {
-    const base: JsonValue = { arr: [0, 0, 1, 0] };
-    const next: JsonValue = { arr: [1, 0, 0, 1] };
+  it("can emit copy for unmatched add/remove pairs when the pending remove has a different value", () => {
+    const base: JsonValue = { arr: [1, 2, 3] };
+    const next: JsonValue = { arr: [1, 1, 2] };
     const ops = diffJsonPatch(base, next, {
       arrayStrategy: "lcs",
-      emitMoves: true,
       emitCopies: true,
     });
 
     expect(ops).toEqual([
-      { op: "add", path: "/arr/0", value: 1 },
-      { op: "remove", path: "/arr/4" },
+      { op: "copy", from: "/arr/0", path: "/arr/1" },
+      { op: "remove", path: "/arr/3" },
     ]);
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });

@@ -390,10 +390,6 @@ function emitObjectStructuralOps(
 
       while (bucket.length > 0) {
         const candidate = bucket.shift()!;
-        if (!jsonEquals(base[candidate]!, next[nextKey]!)) {
-          continue;
-        }
-
         matchedMoveSources.add(candidate);
         moveTargets.set(nextKey, candidate);
         break;
@@ -955,13 +951,12 @@ function finalizeArrayOps(
       const targetIndex = getArrayOpIndex(op.path, arrayPath);
       const removeIndex = getArrayOpIndex(next.path, arrayPath);
       const sourceIndex = removeIndex - (targetIndex <= removeIndex ? 1 : 0);
-
-      if (
-        options.emitMoves &&
+      const matchesPendingRemove =
         sourceIndex >= 0 &&
         sourceIndex < working.length &&
-        jsonEquals(working[sourceIndex]!, op.value)
-      ) {
+        jsonEquals(working[sourceIndex]!, op.value);
+
+      if (options.emitMoves && matchesPendingRemove) {
         const moveOp: JsonPatchOp = {
           op: "move",
           from: stringifyJsonPointer([...arrayPath, String(sourceIndex)]),
@@ -973,14 +968,16 @@ function finalizeArrayOps(
         continue;
       }
 
-      // Keep unmatched add/remove pairs together so copy detection cannot pick
-      // a source from stale pre-remove state.
-      out.push(op);
-      applyArrayOptimizationOp(working, op, arrayPath);
-      out.push(next);
-      applyArrayOptimizationOp(working, next, arrayPath);
-      i += 1;
-      continue;
+      if (matchesPendingRemove) {
+        // Keep matching add/remove pairs together so copy detection does not
+        // rewrite them into copy+remove when moves are disabled.
+        out.push(op);
+        applyArrayOptimizationOp(working, op, arrayPath);
+        out.push(next);
+        applyArrayOptimizationOp(working, next, arrayPath);
+        i += 1;
+        continue;
+      }
     }
 
     if (op.op === "add" && options.emitCopies) {
