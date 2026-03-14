@@ -388,22 +388,23 @@ function emitObjectStructuralOps(
         continue;
       }
 
-      while (bucket.length > 0) {
+      if (bucket.length > 0) {
         const candidate = bucket.shift()!;
         matchedMoveSources.add(candidate);
         moveTargets.set(nextKey, candidate);
-        break;
       }
     }
   }
 
   const availableSources = new Map<string, JsonValue>();
+  const availableSourceKeys: string[] = [];
   for (const key of sharedKeys) {
     if (!jsonEquals(base[key]!, next[key]!)) {
       continue;
     }
 
     availableSources.set(key, base[key]!);
+    availableSourceKeys.push(key);
   }
 
   for (const nextKey of nextOnlyKeys) {
@@ -418,17 +419,19 @@ function emitObjectStructuralOps(
       path.pop();
       ops.push({ op: "move", from: fromPath, path: targetPath });
       availableSources.set(nextKey, next[nextKey]!);
+      insertSortedKey(availableSourceKeys, nextKey);
       continue;
     }
 
     if (options.emitCopies) {
-      const copySource = findObjectCopySource(availableSources, next[nextKey]!);
+      const copySource = findObjectCopySource(availableSourceKeys, availableSources, next[nextKey]!);
       if (copySource !== undefined) {
         path.push(copySource);
         const fromPath = stringifyJsonPointer(path);
         path.pop();
         ops.push({ op: "copy", from: fromPath, path: targetPath });
         availableSources.set(nextKey, next[nextKey]!);
+        insertSortedKey(availableSourceKeys, nextKey);
         continue;
       }
     }
@@ -439,6 +442,7 @@ function emitObjectStructuralOps(
       value: next[nextKey]!,
     });
     availableSources.set(nextKey, next[nextKey]!);
+    insertSortedKey(availableSourceKeys, nextKey);
   }
 
   for (const baseKey of baseOnlyKeys) {
@@ -453,10 +457,10 @@ function emitObjectStructuralOps(
 }
 
 function findObjectCopySource(
+  sortedKeys: readonly string[],
   availableSources: ReadonlyMap<string, JsonValue>,
   target: JsonValue,
 ): string | undefined {
-  const sortedKeys = Array.from(availableSources.keys()).sort();
   for (const key of sortedKeys) {
     if (jsonEquals(availableSources.get(key)!, target)) {
       return key;
@@ -464,6 +468,22 @@ function findObjectCopySource(
   }
 
   return undefined;
+}
+
+function insertSortedKey(keys: string[], key: string): void {
+  let low = 0;
+  let high = keys.length;
+
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (keys[mid]! < key) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+
+  keys.splice(low, 0, key);
 }
 
 function diffArrayWithLcsMatrix(
