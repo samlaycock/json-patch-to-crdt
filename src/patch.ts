@@ -1102,6 +1102,12 @@ function applyArrayOptimizationOp(
 
   if (op.op === "move") {
     const fromIndex = getArrayOpIndex(op.from, arrayPath);
+    if (fromIndex < 0 || fromIndex >= working.length) {
+      throw new Error(
+        `applyArrayOptimizationOp: move from index ${fromIndex} is out of bounds (length ${working.length})`,
+      );
+    }
+
     const [value] = working.splice(fromIndex, 1);
     working.splice(getArrayOpIndex(op.path, arrayPath), 0, value!);
     return;
