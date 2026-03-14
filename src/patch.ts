@@ -329,7 +329,7 @@ function diffObject(
     nextIndex += 1;
   }
 
-  emitObjectStructuralOps(path, base, next, baseOnlyKeys, nextOnlyKeys, ops, options);
+  emitObjectStructuralOps(path, base, next, sharedKeys, baseOnlyKeys, nextOnlyKeys, ops, options);
 
   for (const key of sharedKeys) {
     path.push(key);
@@ -342,6 +342,7 @@ function emitObjectStructuralOps(
   path: string[],
   base: Record<string, JsonValue>,
   next: Record<string, JsonValue>,
+  sharedKeys: string[],
   baseOnlyKeys: string[],
   nextOnlyKeys: string[],
   ops: JsonPatchOp[],
@@ -401,11 +402,7 @@ function emitObjectStructuralOps(
   }
 
   const availableSources = new Map<string, JsonValue>();
-  for (const key of Object.keys(base).sort()) {
-    if (!hasOwn(next, key)) {
-      continue;
-    }
-
+  for (const key of sharedKeys) {
     if (!jsonEquals(base[key]!, next[key]!)) {
       continue;
     }
@@ -912,6 +909,8 @@ function finalizeArrayOps(
   }
 
   const out: JsonPatchOp[] = [];
+  // Keep prefix/suffix elements in the shadow array so copy detection can
+  // reference stable sources outside the trimmed diff window.
   const working = base.slice();
 
   for (let i = 0; i < ops.length; i++) {
