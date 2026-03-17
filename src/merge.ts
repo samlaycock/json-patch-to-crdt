@@ -244,6 +244,9 @@ function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
       if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
         best = elem.insDot.ctr;
       }
+      if (elem.delDot?.actor === actor && elem.delDot.ctr > best) {
+        best = elem.delDot.ctr;
+      }
       stack.push({ node: elem.value, depth: frame.depth + 1 });
     }
   }
