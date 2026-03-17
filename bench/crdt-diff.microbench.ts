@@ -9,6 +9,7 @@ import {
   type JsonPatchOp,
   type JsonValue,
 } from "../src/internals";
+import { parsePositiveIntEnv } from "./utils";
 
 type BenchmarkStats = {
   name: string;
@@ -18,20 +19,6 @@ type BenchmarkStats = {
   p50Ms: number;
   avgHeapDeltaMb: number;
 };
-
-function parsePositiveIntEnv(name: string, fallback: number): number {
-  const raw = Bun.env[name];
-  if (!raw) {
-    return fallback;
-  }
-
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
-    throw new Error(`${name} must be a positive integer, got '${raw}'`);
-  }
-
-  return parsed;
-}
 
 function percentile(sortedValues: number[], p: number): number {
   const pos = Math.floor((sortedValues.length - 1) * p);
