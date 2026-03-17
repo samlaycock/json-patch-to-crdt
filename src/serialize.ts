@@ -359,6 +359,10 @@ function maxObservedCounterForActorInNode(node: Node, actor: string): number {
       maxCtr = Math.max(maxCtr, elem.insDot.ctr);
     }
 
+    if (elem.delDot?.actor === actor) {
+      maxCtr = Math.max(maxCtr, elem.delDot.ctr);
+    }
+
     maxCtr = Math.max(maxCtr, maxObservedCounterForActorInNode(elem.value, actor));
   }
 

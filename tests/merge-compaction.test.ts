@@ -536,6 +536,31 @@ describe("mergeState", () => {
     expect(result.items).toContain("fromA2");
     expect(result.items).toContain("fromB2");
   });
+
+  it("recovers mergeState actor clocks from sequence delete dots", () => {
+    const base = createState({ list: [1] }, { actor: "A" });
+    const deleted = applyPatch(base, [{ op: "remove", path: "/list/0" }]);
+    const staleDeleted: CrdtState = {
+      doc: cloneDoc(deleted.doc),
+      clock: createClock("A", 3),
+    };
+    const peer = forkState(base, "B");
+
+    const merged = mergeState(staleDeleted, peer, { actor: "A" });
+
+    expect(toJson(merged)).toEqual({ list: [] });
+    expect(merged.clock.actor).toBe("A");
+    expect(merged.clock.ctr).toBe(4);
+
+    const next = applyPatch(merged, [{ op: "add", path: "/x", value: 1 }]);
+    expect(toJson(next)).toEqual({ list: [], x: 1 });
+    if (next.doc.root.kind !== "obj") {
+      throw new Error("Expected object root");
+    }
+
+    expect(next.doc.root.entries.get("x")?.dot).toEqual({ actor: "A", ctr: 5 });
+    expect(next.clock.ctr).toBe(6);
+  });
 });
 
 describe("tombstone compaction", () => {

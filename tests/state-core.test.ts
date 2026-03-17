@@ -615,6 +615,30 @@ describe("clock and state", () => {
     expect(next.vv["A"]).toBe(next.state.clock.ctr);
   });
 
+  it("recovers stale actor counters from sequence delete dots in applyPatchAsActor", () => {
+    const base = createState({ list: [1] }, { actor: "A" });
+    const deleted = applyPatch(base, [{ op: "remove", path: "/list/0" }]);
+
+    const resumed = applyPatchAsActor(deleted.doc, {}, "A", [{ op: "add", path: "/x", value: 1 }]);
+
+    expect(toJson(resumed.state)).toEqual({ list: [], x: 1 });
+    if (resumed.state.doc.root.kind !== "obj") {
+      throw new Error("Expected object root");
+    }
+
+    const listNode = resumed.state.doc.root.entries.get("list")?.node;
+    const xEntry = resumed.state.doc.root.entries.get("x");
+    if (!listNode || listNode.kind !== "seq" || !xEntry) {
+      throw new Error("Expected list sequence and x entry");
+    }
+
+    const deletedElem = listNode.elems.get("A:2");
+    expect(deletedElem?.delDot).toEqual({ actor: "A", ctr: 4 });
+    expect(xEntry.dot).toEqual({ actor: "A", ctr: 5 });
+    expect(resumed.state.clock.ctr).toBe(6);
+    expect(resumed.vv["A"]).toBe(6);
+  });
+
   it("exposes a non-throwing applyPatchAsActor helper", () => {
     const doc = docFromJson({ list: ["a"] }, newDotGen("origin", 0));
     const vv: VersionVector = {};
@@ -1238,6 +1262,28 @@ describe("serialization", () => {
     const next = applyPatch(restored, [{ op: "replace", path: "/a", value: 3 }]);
     expect(toJson(next)).toEqual({ a: 3, b: 2 });
     expect(next.clock.ctr).toBeGreaterThan(state.clock.ctr);
+  });
+
+  it("repairs stale serialized clocks from sequence delete dots during deserialization", () => {
+    const base = createState({ list: [1] }, { actor: "A" });
+    const deleted = applyPatch(base, [{ op: "remove", path: "/list/0" }]);
+    const payload = serializeState(deleted);
+
+    payload.clock.ctr = 0;
+
+    const restored = deserializeState(payload);
+
+    expect(restored.clock.actor).toBe("A");
+    expect(restored.clock.ctr).toBe(4);
+
+    const next = applyPatch(restored, [{ op: "add", path: "/x", value: 1 }]);
+    expect(toJson(next)).toEqual({ list: [], x: 1 });
+    if (next.doc.root.kind !== "obj") {
+      throw new Error("Expected object root");
+    }
+
+    expect(next.doc.root.entries.get("x")?.dot).toEqual({ actor: "A", ctr: 5 });
+    expect(next.clock.ctr).toBe(6);
   });
 
   it("rejects sequence elements whose key does not match element id", () => {
