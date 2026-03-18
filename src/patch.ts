@@ -582,13 +582,13 @@ function insertObjectSourceBucket(
   structuralKeyCache: WeakMap<object, string>,
 ): void {
   const bucketKey = stableJsonValueKey(value, structuralKeyCache);
-  const bucket = buckets.get(bucketKey);
-  if (bucket) {
-    insertSortedKey(bucket, key);
-    return;
+  let bucket = buckets.get(bucketKey);
+  if (!bucket) {
+    bucket = [];
+    buckets.set(bucketKey, bucket);
   }
 
-  buckets.set(bucketKey, [key]);
+  insertSortedKey(bucket, key);
 }
 
 function findObjectCopySource(
@@ -1173,6 +1173,7 @@ function finalizeArrayOps(
   return out;
 }
 
+/** @internal Stable structural fingerprint used for deterministic diff rewrites. */
 export function stableJsonValueKey(
   value: JsonValue,
   structuralKeyCache?: WeakMap<object, string>,
