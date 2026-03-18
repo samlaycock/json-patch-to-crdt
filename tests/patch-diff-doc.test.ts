@@ -722,6 +722,40 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("keeps wide nested object move and copy rewrites deterministic", () => {
+    const buildNestedValue = (index: number): JsonValue => ({
+      meta: {
+        id: index,
+        tags: [`tag-${index}`, `group-${index % 5}`],
+      },
+      payload: {
+        active: index % 2 === 0,
+        score: index * 10,
+      },
+    });
+
+    const baseEntries = Array.from({ length: 24 }, (_, index) => [
+      `k${String(index).padStart(2, "0")}`,
+      buildNestedValue(index),
+    ]);
+    const base: JsonValue = Object.fromEntries(baseEntries);
+    const nextEntries = baseEntries.map(([key, value]) => [key, value]);
+    nextEntries[5] = ["renamed-05", nextEntries[5]![1]];
+    nextEntries.push(["duplicate-22", nextEntries[22]![1]]);
+    const next: JsonValue = Object.fromEntries(nextEntries);
+
+    const ops = diffJsonPatch(base, next, {
+      emitMoves: true,
+      emitCopies: true,
+    });
+
+    expect(ops).toEqual([
+      { op: "copy", from: "/k22", path: "/duplicate-22" },
+      { op: "move", from: "/k05", path: "/renamed-05" },
+    ]);
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
   it("prefers deterministic earliest copy sources for duplicates", () => {
     const base: JsonValue = { arr: [1, 1] };
     const next: JsonValue = { arr: [1, 1, 1] };
