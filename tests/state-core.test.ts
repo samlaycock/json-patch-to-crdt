@@ -66,6 +66,7 @@ import {
   toJson,
   vvHasDot,
   vvMerge,
+  JsonValueValidationError,
   type Dot,
   type SerializedDoc,
   type IntentOp,
@@ -94,6 +95,7 @@ import {
   makeDeepObjectNode,
   maxVvCtr,
   newDotGen,
+  nonPlainObjectCases,
   randomArray,
   randomObject,
   randomObjectWithOrder,
@@ -234,6 +236,50 @@ describe("clock and state", () => {
       nested: { keep: true },
       arr: [1, null, null],
     });
+  });
+
+  it("rejects non-plain object initial values in strict jsonValidation mode", () => {
+    for (const sample of nonPlainObjectCases()) {
+      try {
+        createState({ value: sample.create() } as unknown as JsonValue, {
+          actor: "A",
+          jsonValidation: "strict",
+        });
+        throw new Error(`Expected strict validation to reject ${sample.label}`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(JsonValueValidationError);
+        if (error instanceof JsonValueValidationError) {
+          expect(error.path).toBe("/value");
+          expect(error.detail).toContain("non-plain object");
+        }
+      }
+    }
+  });
+
+  it("normalizes non-plain object initial values consistently in normalize jsonValidation mode", () => {
+    const invalidEntries = Object.fromEntries(
+      nonPlainObjectCases().map((sample) => [sample.label, sample.create()]),
+    );
+    const invalidArray = nonPlainObjectCases().map((sample) => sample.create());
+    const state = createState(
+      {
+        keep: true,
+        invalid: invalidEntries,
+        arr: invalidArray,
+      } as unknown as JsonValue,
+      { actor: "A", jsonValidation: "normalize" },
+    );
+    const rootState = createState(nonPlainObjectCases()[0]!.create() as unknown as JsonValue, {
+      actor: "A",
+      jsonValidation: "normalize",
+    });
+
+    expect(toJson(state)).toEqual({
+      keep: true,
+      invalid: {},
+      arr: invalidArray.map(() => null),
+    });
+    expect(toJson(rootState)).toBeNull();
   });
 
   it("handles deeply nested objects in createState and toJson", () => {

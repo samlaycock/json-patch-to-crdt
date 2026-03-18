@@ -75,6 +75,48 @@ export function cloneJson<T>(value: T): T {
   return structuredClone(value);
 }
 
+export interface NonPlainObjectCase {
+  readonly label: string;
+  readonly create: () => object;
+}
+
+class ExampleJsonClass {
+  readonly value: string;
+
+  constructor(value: string) {
+    this.value = value;
+  }
+}
+
+export function nonPlainObjectCases(): readonly NonPlainObjectCase[] {
+  return [
+    {
+      label: "date",
+      create: () => new Date("2020-01-01T00:00:00.000Z"),
+    },
+    {
+      label: "map",
+      create: () => new Map([["key", 1]]),
+    },
+    {
+      label: "set",
+      create: () => new Set([1, 2]),
+    },
+    {
+      label: "regexp",
+      create: () => /json/i,
+    },
+    {
+      label: "uint8Array",
+      create: () => new Uint8Array([1, 2, 3]),
+    },
+    {
+      label: "classInstance",
+      create: () => new ExampleJsonClass("value"),
+    },
+  ];
+}
+
 export function applyJsonPatch(base: JsonValue, patch: JsonPatchOp[]): JsonValue {
   let doc: JsonValue = cloneJson(base);
 

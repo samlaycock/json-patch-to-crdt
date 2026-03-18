@@ -78,6 +78,7 @@ export function assertRuntimeJsonValue(value: unknown): asserts value is JsonVal
 /**
  * Normalize a runtime value to JSON-compatible data.
  * - non-finite numbers -> null
+ * - non-plain objects -> null at the root / in arrays, omitted from object properties
  * - invalid object-property values -> key omitted
  * - invalid root / array values -> null
  */
@@ -187,7 +188,16 @@ function isJsonPrimitive(value: unknown): value is null | string | number | bool
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  if (Object.prototype.toString.call(value) !== "[object Object]") {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || Object.getPrototypeOf(prototype) === null;
 }
 
 function isNonFiniteNumber(value: unknown): value is number {
@@ -215,5 +225,27 @@ function describeInvalidValue(value: unknown): string {
     return "function is not valid JSON";
   }
 
+  if (typeof value === "object" && value !== null) {
+    return `non-plain object (${describeObjectKind(value)}) is not valid JSON`;
+  }
+
   return `unsupported value type (${typeof value})`;
+}
+
+function describeObjectKind(value: object): string {
+  const tag = Object.prototype.toString.call(value).slice(8, -1);
+  if (tag !== "Object") {
+    return tag;
+  }
+
+  const constructor = (value as { constructor?: unknown }).constructor;
+  if (
+    typeof constructor === "function" &&
+    constructor.name !== "" &&
+    constructor.name !== "Object"
+  ) {
+    return constructor.name;
+  }
+
+  return "Object";
 }

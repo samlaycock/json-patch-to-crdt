@@ -61,6 +61,7 @@ import {
   toJson,
   vvHasDot,
   vvMerge,
+  JsonValueValidationError,
   type Dot,
   type SerializedDoc,
   type IntentOp,
@@ -89,6 +90,7 @@ import {
   makeDeepObjectNode,
   maxVvCtr,
   newDotGen,
+  nonPlainObjectCases,
   randomArray,
   randomObject,
   randomObjectWithOrder,
@@ -293,6 +295,52 @@ describe("diffJsonPatch", () => {
     );
 
     expect(ops).toEqual([]);
+  });
+
+  it("rejects non-plain runtime values in strict jsonValidation mode", () => {
+    for (const sample of nonPlainObjectCases()) {
+      try {
+        diffJsonPatch(
+          { value: sample.create() } as unknown as JsonValue,
+          { value: sample.create() } as unknown as JsonValue,
+          { jsonValidation: "strict" },
+        );
+        throw new Error(`Expected strict validation to reject ${sample.label}`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(JsonValueValidationError);
+        if (error instanceof JsonValueValidationError) {
+          expect(error.path).toBe("/value");
+          expect(error.detail).toContain("non-plain object");
+        }
+      }
+    }
+  });
+
+  it("normalizes non-plain runtime values consistently in normalize jsonValidation mode", () => {
+    const invalidEntries = Object.fromEntries(
+      nonPlainObjectCases().map((sample) => [sample.label, sample.create()]),
+    );
+    const invalidArray = nonPlainObjectCases().map((sample) => sample.create());
+    const ops = diffJsonPatch(
+      {
+        keep: true,
+        invalid: invalidEntries,
+        arr: invalidArray,
+      } as unknown as JsonValue,
+      {
+        keep: true,
+        invalid: {},
+        arr: invalidArray.map(() => null),
+      } as unknown as JsonValue,
+      { jsonValidation: "normalize" },
+    );
+
+    expect(ops).toEqual([]);
+    expect(
+      diffJsonPatch(nonPlainObjectCases()[0]!.create() as unknown as JsonValue, null, {
+        jsonValidation: "normalize",
+      }),
+    ).toEqual([]);
   });
 
   it("adds and removes object keys", () => {
