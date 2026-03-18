@@ -7,6 +7,7 @@ import type {
   PatchErrorReason,
 } from "./types";
 
+import { assertTraversalDepth } from "./depth";
 import { coerceRuntimeJsonValue } from "./json-value";
 import { ROOT_KEY } from "./types";
 
@@ -27,6 +28,57 @@ type InternalCompilePatchOptions = {
   pointerCache?: Map<string, string[]>;
   opIndexOffset?: number;
 };
+
+interface DiffValueFrame {
+  readonly kind: "value";
+  readonly base: JsonValue;
+  readonly next: JsonValue;
+}
+
+interface DiffObjectFrame {
+  readonly kind: "object";
+  readonly base: Record<string, JsonValue>;
+  readonly next: Record<string, JsonValue>;
+  readonly sharedKeys: readonly string[];
+  readonly index: number;
+}
+
+interface DiffPathPopFrame {
+  readonly kind: "path-pop";
+}
+
+type DiffFrame = DiffValueFrame | DiffObjectFrame | DiffPathPopFrame;
+
+interface JsonEqualFrame {
+  readonly left: JsonValue;
+  readonly right: JsonValue;
+  readonly depth: number;
+}
+
+interface StableJsonValueFrame {
+  readonly kind: "value";
+  readonly value: JsonValue;
+  readonly depth: number;
+}
+
+interface StableJsonArrayFrame {
+  readonly kind: "array";
+  readonly startIndex: number;
+}
+
+interface StableJsonObjectFrame {
+  readonly kind: "object";
+  readonly keys: readonly string[];
+  readonly startIndex: number;
+}
+
+type StableJsonKeyFrame = StableJsonValueFrame | StableJsonArrayFrame | StableJsonObjectFrame;
+
+interface ObjectKeyGroups {
+  readonly sharedKeys: string[];
+  readonly baseOnlyKeys: string[];
+  readonly nextOnlyKeys: string[];
+}
 
 /** Structured compile error used to map patch validation failures to typed reasons. */
 export class PatchCompileError extends Error {
@@ -251,44 +303,114 @@ function diffValue(
   ops: JsonPatchOp[],
   options: DiffOptions,
 ): void {
-  if (jsonEquals(base, next)) {
-    return;
-  }
+  const stack: DiffFrame[] = [{ kind: "value", base, next }];
 
-  if (Array.isArray(base) || Array.isArray(next)) {
-    const arrayStrategy = options.arrayStrategy ?? "lcs";
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
 
-    if (arrayStrategy === "lcs" && Array.isArray(base) && Array.isArray(next)) {
-      if (!diffArrayWithLcsMatrix(path, base, next, ops, options)) {
-        ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
+    if (frame.kind === "path-pop") {
+      path.pop();
+      continue;
+    }
+
+    if (frame.kind === "object") {
+      if (frame.index >= frame.sharedKeys.length) {
+        continue;
       }
-      return;
+
+      const key = frame.sharedKeys[frame.index]!;
+      stack.push({
+        kind: "object",
+        base: frame.base,
+        next: frame.next,
+        sharedKeys: frame.sharedKeys,
+        index: frame.index + 1,
+      });
+      path.push(key);
+      stack.push({ kind: "path-pop" });
+      stack.push({
+        kind: "value",
+        base: frame.base[key]!,
+        next: frame.next[key]!,
+      });
+      continue;
     }
 
-    if (arrayStrategy === "lcs-linear" && Array.isArray(base) && Array.isArray(next)) {
-      diffArrayWithLinearLcs(path, base, next, ops, options);
-      return;
+    assertTraversalDepth(path.length);
+
+    if (frame.base === frame.next) {
+      continue;
     }
 
-    ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
-    return;
-  }
+    const baseIsArray = Array.isArray(frame.base);
+    const nextIsArray = Array.isArray(frame.next);
+    if (baseIsArray || nextIsArray) {
+      if (!baseIsArray || !nextIsArray) {
+        ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
+        continue;
+      }
 
-  if (!isPlainObject(base) || !isPlainObject(next)) {
-    ops.push({ op: "replace", path: stringifyJsonPointer(path), value: next });
-    return;
-  }
+      if (jsonEquals(frame.base, frame.next)) {
+        continue;
+      }
 
-  diffObject(path, base, next, ops, options);
+      const arrayStrategy = options.arrayStrategy ?? "lcs";
+
+      if (arrayStrategy === "lcs") {
+        if (!diffArrayWithLcsMatrix(path, frame.base, frame.next, ops, options)) {
+          ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
+        }
+        continue;
+      }
+
+      if (arrayStrategy === "lcs-linear") {
+        diffArrayWithLinearLcs(path, frame.base, frame.next, ops, options);
+        continue;
+      }
+
+      ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
+      continue;
+    }
+
+    const baseIsObject = isPlainObject(frame.base);
+    const nextIsObject = isPlainObject(frame.next);
+    if (!baseIsObject || !nextIsObject) {
+      if (jsonEquals(frame.base, frame.next)) {
+        continue;
+      }
+
+      ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
+      continue;
+    }
+
+    const { sharedKeys, baseOnlyKeys, nextOnlyKeys } = collectObjectKeys(frame.base, frame.next);
+    emitObjectStructuralOps(
+      path,
+      frame.base,
+      frame.next,
+      sharedKeys,
+      baseOnlyKeys,
+      nextOnlyKeys,
+      ops,
+      options,
+    );
+
+    if (sharedKeys.length > 0) {
+      stack.push({
+        kind: "object",
+        base: frame.base,
+        next: frame.next,
+        sharedKeys,
+        index: 0,
+      });
+    }
+  }
 }
 
-function diffObject(
-  path: string[],
+function collectObjectKeys(
   base: Record<string, JsonValue>,
   next: Record<string, JsonValue>,
-  ops: JsonPatchOp[],
-  options: DiffOptions,
-): void {
+): ObjectKeyGroups {
   const baseKeys = Object.keys(base).sort();
   const nextKeys = Object.keys(next).sort();
   const baseOnlyKeys: string[] = [];
@@ -329,13 +451,7 @@ function diffObject(
     nextIndex += 1;
   }
 
-  emitObjectStructuralOps(path, base, next, sharedKeys, baseOnlyKeys, nextOnlyKeys, ops, options);
-
-  for (const key of sharedKeys) {
-    path.push(key);
-    diffValue(path, base[key]!, next[key]!, ops, options);
-    path.pop();
-  }
+  return { sharedKeys, baseOnlyKeys, nextOnlyKeys };
 }
 
 function emitObjectStructuralOps(
@@ -1026,16 +1142,62 @@ function finalizeArrayOps(
 }
 
 function stableJsonValueKey(value: JsonValue): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
+  const stack: StableJsonKeyFrame[] = [{ kind: "value", value, depth: 0 }];
+  const results: string[] = [];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+
+    if (frame.kind === "array") {
+      const childParts = results.splice(frame.startIndex);
+      results.push(`[${childParts.join(",")}]`);
+      continue;
+    }
+
+    if (frame.kind === "object") {
+      const childParts = results.splice(frame.startIndex);
+      results.push(
+        `{${frame.keys
+          .map((key, index) => `${JSON.stringify(key)}:${childParts[index]!}`)
+          .join(",")}}`,
+      );
+      continue;
+    }
+
+    assertTraversalDepth(frame.depth);
+
+    if (frame.value === null || typeof frame.value !== "object") {
+      results.push(JSON.stringify(frame.value));
+      continue;
+    }
+
+    if (Array.isArray(frame.value)) {
+      const startIndex = results.length;
+      stack.push({ kind: "array", startIndex });
+      for (let index = frame.value.length - 1; index >= 0; index--) {
+        stack.push({
+          kind: "value",
+          value: frame.value[index]!,
+          depth: frame.depth + 1,
+        });
+      }
+      continue;
+    }
+
+    const keys = Object.keys(frame.value).sort();
+    const startIndex = results.length;
+    stack.push({ kind: "object", keys, startIndex });
+    for (let index = keys.length - 1; index >= 0; index--) {
+      const key = keys[index]!;
+      stack.push({
+        kind: "value",
+        value: frame.value[key]!,
+        depth: frame.depth + 1,
+      });
+    }
   }
 
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJsonValueKey).join(",")}]`;
-  }
-
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJsonValueKey(value[key]!)}`).join(",")}}`;
+  return results[0]!;
 }
 
 function compactArrayOps(ops: JsonPatchOp[]): JsonPatchOp[] {
@@ -1142,49 +1304,61 @@ function escapeJsonPointer(token: string): string {
 
 /** Deep equality check for JSON values (null-safe, handles arrays and objects). */
 export function jsonEquals(a: JsonValue, b: JsonValue): boolean {
-  if (a === b) {
-    return true;
-  }
+  const stack: JsonEqualFrame[] = [{ left: a, right: b, depth: 0 }];
 
-  if (a === null || b === null) {
-    return false;
-  }
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    assertTraversalDepth(frame.depth);
 
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b)) {
+    if (frame.left === frame.right) {
+      continue;
+    }
+
+    if (frame.left === null || frame.right === null) {
       return false;
     }
 
-    if (a.length !== b.length) {
-      return false;
-    }
-
-    for (let i = 0; i < a.length; i++) {
-      if (!jsonEquals(a[i]!, b[i]!)) {
+    if (Array.isArray(frame.left) || Array.isArray(frame.right)) {
+      if (!Array.isArray(frame.left) || !Array.isArray(frame.right)) {
         return false;
       }
+
+      if (frame.left.length !== frame.right.length) {
+        return false;
+      }
+
+      for (let index = frame.left.length - 1; index >= 0; index--) {
+        stack.push({
+          left: frame.left[index]!,
+          right: frame.right[index]!,
+          depth: frame.depth + 1,
+        });
+      }
+      continue;
     }
 
-    return true;
-  }
-
-  if (!isPlainObject(a) || !isPlainObject(b)) {
-    return false;
-  }
-
-  const aKeys = Object.keys(a);
-  const bKeys = Object.keys(b);
-
-  if (aKeys.length !== bKeys.length) {
-    return false;
-  }
-
-  for (const key of aKeys) {
-    if (!hasOwn(b, key)) {
+    if (!isPlainObject(frame.left) || !isPlainObject(frame.right)) {
       return false;
     }
-    if (!jsonEquals(a[key]!, b[key]!)) {
+
+    const leftKeys = Object.keys(frame.left);
+    const rightKeys = Object.keys(frame.right);
+
+    if (leftKeys.length !== rightKeys.length) {
       return false;
+    }
+
+    for (let index = leftKeys.length - 1; index >= 0; index--) {
+      const key = leftKeys[index]!;
+      if (!hasOwn(frame.right, key)) {
+        return false;
+      }
+
+      stack.push({
+        left: frame.left[key]!,
+        right: frame.right[key]!,
+        depth: frame.depth + 1,
+      });
     }
   }
 
