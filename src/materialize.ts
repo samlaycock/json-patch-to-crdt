@@ -3,6 +3,14 @@ import type { JsonValue, Node, ObjEntry } from "./types";
 import { assertTraversalDepth } from "./depth";
 import { rgaCreateLinearCursor } from "./rga";
 
+type MaterializeObserver = (path: readonly string[], node: Node) => void;
+
+let materializeObserver: MaterializeObserver | null = null;
+
+export function setMaterializeObserverForTests(observer: MaterializeObserver | null): void {
+  materializeObserver = observer;
+}
+
 function createMaterializedObject(): Record<string, JsonValue> {
   return Object.create(null) as Record<string, JsonValue>;
 }
@@ -22,6 +30,9 @@ function setMaterializedProperty(
 
 /** Convert a CRDT node graph into a plain JSON value using an explicit stack. */
 export function materialize(node: Node): JsonValue {
+  const observer = materializeObserver;
+  observer?.([], node);
+
   if (node.kind === "lww") {
     return node.value;
   }
@@ -32,12 +43,15 @@ export function materialize(node: Node): JsonValue {
     depth: number;
     entries: IterableIterator<[string, ObjEntry]>;
     out: Record<string, JsonValue>;
+    path: readonly string[];
   };
   type SeqFrame = {
     kind: "seq";
     depth: number;
     cursor: ReturnType<typeof rgaCreateLinearCursor>;
     out: JsonValue[];
+    path: readonly string[];
+    nextIndex: number;
   };
   type Frame = ObjFrame | SeqFrame;
 
@@ -48,6 +62,7 @@ export function materialize(node: Node): JsonValue {
       depth: 0,
       entries: node.entries.entries(),
       out: root as Record<string, JsonValue>,
+      path: [],
     });
   } else {
     stack.push({
@@ -55,6 +70,8 @@ export function materialize(node: Node): JsonValue {
       depth: 0,
       cursor: rgaCreateLinearCursor(node),
       out: root as JsonValue[],
+      path: [],
+      nextIndex: 0,
     });
   }
 
@@ -71,6 +88,8 @@ export function materialize(node: Node): JsonValue {
       const child = entry.node;
       const childDepth = frame.depth + 1;
       assertTraversalDepth(childDepth);
+      const childPath = [...frame.path, key];
+      observer?.(childPath, child);
 
       if (child.kind === "lww") {
         setMaterializedProperty(frame.out, key, child.value);
@@ -85,6 +104,7 @@ export function materialize(node: Node): JsonValue {
           depth: childDepth,
           entries: child.entries.entries(),
           out: outObj,
+          path: childPath,
         });
         continue;
       }
@@ -96,6 +116,8 @@ export function materialize(node: Node): JsonValue {
         depth: childDepth,
         cursor: rgaCreateLinearCursor(child),
         out: outArr,
+        path: childPath,
+        nextIndex: 0,
       });
       continue;
     }
@@ -109,6 +131,9 @@ export function materialize(node: Node): JsonValue {
     const child = elem.value;
     const childDepth = frame.depth + 1;
     assertTraversalDepth(childDepth);
+    const childPath = [...frame.path, String(frame.nextIndex)];
+    frame.nextIndex += 1;
+    observer?.(childPath, child);
 
     if (child.kind === "lww") {
       frame.out.push(child.value);
@@ -123,6 +148,7 @@ export function materialize(node: Node): JsonValue {
         depth: childDepth,
         entries: child.entries.entries(),
         out: outObj,
+        path: childPath,
       });
       continue;
     }
@@ -134,6 +160,8 @@ export function materialize(node: Node): JsonValue {
       depth: childDepth,
       cursor: rgaCreateLinearCursor(child),
       out: outArr,
+      path: childPath,
+      nextIndex: 0,
     });
   }
 

@@ -17,6 +17,7 @@ import {
   compileJsonPatchToIntent,
   docFromJson,
 } from "../src/internals";
+import { setMaterializeObserverForTests } from "../src/materialize";
 
 describe("performance regressions", () => {
   it("diffs large arrays with a narrow changed window without full-array replace", () => {
@@ -265,21 +266,18 @@ describe("performance regressions", () => {
       { actor: "perf" },
     );
     const head = applyPatch(base, [{ op: "replace", path: "/meta/version", value: 1 }]);
-    let untouchedTraversalCalls = 0;
-    const originalMapValues = Object.getOwnPropertyDescriptor(Map.prototype, "values")!.value as <
-      K,
-      V,
-    >(
-      this: Map<K, V>,
-    ) => ReturnType<Map<K, V>["values"]>;
+    let untouchedMaterializeCalls = 0;
 
-    Map.prototype.values = function values<K, V>(this: Map<K, V>) {
-      if (this.size === 2_500) {
-        untouchedTraversalCalls += 1;
+    setMaterializeObserverForTests((path, node) => {
+      if (
+        node.kind === "seq" &&
+        path.length === 2 &&
+        path[0] === "untouched" &&
+        path[1] === "huge"
+      ) {
+        untouchedMaterializeCalls += 1;
       }
-
-      return originalMapValues.call(this);
-    };
+    });
 
     try {
       applyPatchInPlace(head, [{ op: "replace", path: "/meta/version", value: 2 }], {
@@ -289,7 +287,7 @@ describe("performance regressions", () => {
         atomic: false,
       });
     } finally {
-      Map.prototype.values = originalMapValues;
+      setMaterializeObserverForTests(null);
     }
 
     const json = toJson(head) as {
@@ -303,7 +301,7 @@ describe("performance regressions", () => {
       nested: { label: "v2499", even: false },
     });
 
-    expect(untouchedTraversalCalls).toBe(0);
+    expect(untouchedMaterializeCalls).toBe(0);
   });
 
   it("compacts high-volume stable tombstones without changing materialized output", () => {

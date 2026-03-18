@@ -151,6 +151,16 @@ export function rgaLinearizeIds(seq: RgaSeq): ElemId[] {
   return [...out];
 }
 
+export function rgaLength(seq: RgaSeq): number {
+  const ver = getVersion(seq);
+  const cached = linearCache.get(seq);
+  if (cached && cached.version === ver) {
+    return cached.ids.length;
+  }
+
+  return rgaLinearizeIds(seq).length;
+}
+
 export function rgaCreateIndexedIdSnapshot(seq: RgaSeq): RgaIndexedIdSnapshot {
   const ids = rgaLinearizeIds(seq);
 

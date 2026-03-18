@@ -42,7 +42,7 @@ import {
   parseJsonPointer,
   stringifyJsonPointer,
 } from "./patch";
-import { rgaIdAtIndex, rgaLinearizeIds } from "./rga";
+import { rgaIdAtIndex, rgaLength } from "./rga";
 import { ROOT_KEY } from "./types";
 
 /** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
@@ -666,7 +666,7 @@ function compilePreparedSingleIntentFromDoc(
     const parsedIndex = parseArrayIndexTokenForDoc(
       key,
       op.op,
-      rgaLinearizeIds(parentNode).length,
+      rgaLength(parentNode),
       op.path,
       opIndex,
     );
@@ -800,8 +800,19 @@ function resolveNodeAtPath(
       }
 
       const index = Number(segment);
+      if (!Number.isSafeInteger(index)) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "OUT_OF_BOUNDS",
+            message: `Index out of bounds at '${segment}'`,
+          },
+        };
+      }
+
       const elemId = rgaIdAtIndex(current, index);
-      if (!Number.isSafeInteger(index) || elemId === undefined) {
+      if (elemId === undefined) {
         return {
           ok: false,
           error: {
