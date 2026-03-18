@@ -286,6 +286,30 @@ describe("mergeDoc", () => {
     }
   });
 
+  it("escapes shared-origin lineage mismatch paths under escaped object keys", () => {
+    const expectedPath = stringifyJsonPointer(["a~b", "c/d"]);
+    const a = docFromJson({ "a~b": { "c/d": [1] } }, newDotGen("A"));
+    const b = docFromJson({ "a~b": { "c/d": [1] } }, newDotGen("B"));
+
+    const res = tryMergeDoc(a, b);
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+      expect(res.error.path).toBe(expectedPath);
+      expect(res.error.message).toContain(expectedPath);
+    }
+
+    expect(() => mergeDoc(a, b)).toThrow(MergeError);
+    try {
+      mergeDoc(a, b);
+    } catch (error) {
+      expect(error).toBeInstanceOf(MergeError);
+      if (error instanceof MergeError) {
+        expect(error.path).toBe(expectedPath);
+      }
+    }
+  });
+
   it("allows merging unrelated arrays when shared-origin checks are disabled", () => {
     const a = docFromJson([1], newDotGen("A"));
     const b = docFromJson([1], newDotGen("B"));
@@ -329,6 +353,50 @@ describe("mergeDoc", () => {
     }
 
     expect(() => mergeDoc(a, b)).toThrow(MergeError);
+  });
+
+  it("escapes shared RGA metadata mismatch paths under escaped object keys", () => {
+    const expectedPath = stringifyJsonPointer(["a~b", "c/d"]);
+    const origin = createState({ "a~b": { "c/d": ["a", "b"] } }, { actor: "origin" });
+    const a = cloneDoc(origin.doc);
+    const b = cloneDoc(origin.doc);
+
+    if (a.root.kind !== "obj" || b.root.kind !== "obj") {
+      throw new Error("Expected object roots");
+    }
+
+    const nestedA = a.root.entries.get("a~b")?.node;
+    const nestedB = b.root.entries.get("a~b")?.node;
+    if (!nestedA || !nestedB || nestedA.kind !== "obj" || nestedB.kind !== "obj") {
+      throw new Error("Expected nested object nodes");
+    }
+
+    const seqA = nestedA.entries.get("c/d")?.node;
+    const seqB = nestedB.entries.get("c/d")?.node;
+    if (!seqA || !seqB || seqA.kind !== "seq" || seqB.kind !== "seq") {
+      throw new Error("Expected nested list sequences");
+    }
+
+    const ids = rgaLinearizeIds(seqA);
+    const secondId = ids[1];
+    if (!secondId) {
+      throw new Error("Expected second element id");
+    }
+
+    const corrupted = seqB.elems.get(secondId);
+    if (!corrupted) {
+      throw new Error("Expected shared element in second sequence");
+    }
+    corrupted.prev = HEAD;
+
+    const res = tryMergeDoc(a, b);
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+      expect(res.error.path).toBe(expectedPath);
+      expect(res.error.message).toContain("prev");
+      expect(res.error.message).toContain(secondId);
+    }
   });
 
   it("rejects shared RGA ids when insertion dots disagree", () => {
