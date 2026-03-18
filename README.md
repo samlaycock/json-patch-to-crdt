@@ -158,6 +158,38 @@ try {
 
 If you prefer non-throwing results, use `tryApplyPatch(...)` / `tryMergeState(...)`.
 
+## Version Vector Helpers
+
+`observedVersionVector(...)` lets you inspect the highest observed counter per
+actor from either a `Doc` or a `CrdtState`. Use `mergeVersionVectors(...)` to
+union peer observations, and `intersectVersionVectors(...)` when you need a
+causally-stable checkpoint that every replica has already seen.
+
+```ts
+import {
+  compactStateTombstones,
+  intersectVersionVectors,
+  mergeVersionVectors,
+  observedVersionVector,
+  versionVectorCovers,
+} from "json-patch-to-crdt";
+
+const seenByReplicaA = observedVersionVector(replicaA);
+const seenByReplicaB = observedVersionVector(replicaB);
+
+const mergedCheckpoint = mergeVersionVectors(seenByReplicaA, seenByReplicaB);
+const stableCheckpoint = intersectVersionVectors(seenByReplicaA, seenByReplicaB);
+
+if (versionVectorCovers(mergedCheckpoint, stableCheckpoint)) {
+  const compacted = compactStateTombstones(state, { stable: stableCheckpoint });
+}
+```
+
+Use `mergeVersionVectors(...)` for sync-style "what has this cluster observed?"
+bookkeeping. Use `intersectVersionVectors(...)` for tombstone compaction
+checkpoints, because compaction is only safe once every live peer covers the
+same delete dots.
+
 ## Runtime JSON Validation
 
 `createState`, `applyPatch`, `diffJsonPatch`, and `crdtToJsonPatch` accept a
@@ -196,6 +228,11 @@ Main exports most apps need:
 - `tryApplyPatch(state, patch, options?)`
 - `mergeState(local, remote, { actor })`
 - `tryMergeState(local, remote, options?)`
+- `observedVersionVector(stateOrDoc)`
+- `mergeVersionVectors(...vectors)`
+- `intersectVersionVectors(...vectors)`
+- `versionVectorCovers(observed, required)`
+- `compactStateTombstones(state, { stable })`
 - `toJson(stateOrDoc)`
 - `diffJsonPatch(baseJson, nextJson, options?)`
 - `serializeState(state)` / `deserializeState(payload)`

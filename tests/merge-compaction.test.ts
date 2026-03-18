@@ -4,6 +4,10 @@ import { describe, expect, it } from "bun:test";
 import type { SerializedSyncRecord, SyncEnvelope, SyncJson, SyncRecord } from "./test-utils";
 
 import {
+  intersectVersionVectors as publicIntersectVersionVectors,
+  observedVersionVector as publicObservedVersionVector,
+} from "../src/index";
+import {
   applyIntentsToCrdt,
   applyPatch,
   applyPatchAsActor,
@@ -734,5 +738,24 @@ describe("tombstone compaction", () => {
     expect(compacted.stats.objectTombstonesRemoved).toBe(1);
     expect(objNode.tombstone.has("x")).toBeFalse();
     expect(materialize(removed.doc.root)).toEqual({ obj: {} });
+  });
+
+  it("derives stable compaction checkpoints from public version-vector helpers", () => {
+    const origin = createState({ obj: { x: 1 } }, { actor: "origin" });
+    const replicaA = forkState(origin, "A");
+    const replicaB = forkState(origin, "B");
+
+    const deletedOnA = applyPatch(replicaA, [{ op: "remove", path: "/obj/x" }]);
+    const mergedOnB = mergeState(replicaB, deletedOnA, { actor: "B" });
+    const stable = publicIntersectVersionVectors(
+      publicObservedVersionVector(deletedOnA),
+      publicObservedVersionVector(mergedOnB),
+    );
+
+    const compacted = compactStateTombstones(deletedOnA, { stable });
+    const objNode = (compacted.state.doc.root as any).entries.get("obj")?.node as any;
+
+    expect(objNode.tombstone.has("x")).toBeFalse();
+    expect(toJson(compacted.state)).toEqual({ obj: {} });
   });
 });

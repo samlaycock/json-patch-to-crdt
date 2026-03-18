@@ -91,6 +91,12 @@ export { ROOT_KEY } from "./types";
 
 // Dot utilities.
 export { compareDot, vvHasDot, vvMerge, dotToElemId } from "./dot";
+export {
+  observedVersionVector,
+  mergeVersionVectors,
+  intersectVersionVectors,
+  versionVectorCovers,
+} from "./version-vector";
 
 // Low-level node constructors and operations.
 export { newObj, newSeq, newReg, lwwSet, objSet, objRemove, objCompactTombstones } from "./nodes";

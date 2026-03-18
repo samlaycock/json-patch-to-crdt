@@ -18,6 +18,7 @@ import type {
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth } from "./depth";
 import { dotToElemId } from "./dot";
+import { observedVersionVector } from "./version-vector";
 
 const HEAD_ELEM_ID = "HEAD";
 const SERIALIZED_DOC_VERSION = 1 as const;
@@ -107,7 +108,7 @@ export function deserializeState(data: SerializedState): CrdtState {
   const actor = readActor(clockRaw.actor, "/clock/actor");
   const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
   const doc = deserializeDoc(raw.doc as SerializedDoc);
-  const observedCtr = maxObservedCounterForActorInNode(doc.root, actor);
+  const observedCtr = observedVersionVector(doc)[actor] ?? 0;
   const clock = createClock(actor, Math.max(ctr, observedCtr));
   return { doc, clock };
 }
@@ -340,47 +341,6 @@ function assertAcyclicRgaPredecessors(elems: Map<string, RgaElem>, path: string)
       visitState.set(id, 2);
     }
   }
-}
-
-function maxObservedCounterForActorInNode(node: Node, actor: string): number {
-  if (node.kind === "lww") {
-    return node.dot.actor === actor ? node.dot.ctr : 0;
-  }
-
-  if (node.kind === "obj") {
-    let maxCtr = 0;
-
-    for (const entry of node.entries.values()) {
-      if (entry.dot.actor === actor) {
-        maxCtr = Math.max(maxCtr, entry.dot.ctr);
-      }
-
-      maxCtr = Math.max(maxCtr, maxObservedCounterForActorInNode(entry.node, actor));
-    }
-
-    for (const tombstoneDot of node.tombstone.values()) {
-      if (tombstoneDot.actor === actor) {
-        maxCtr = Math.max(maxCtr, tombstoneDot.ctr);
-      }
-    }
-
-    return maxCtr;
-  }
-
-  let maxCtr = 0;
-  for (const elem of node.elems.values()) {
-    if (elem.insDot.actor === actor) {
-      maxCtr = Math.max(maxCtr, elem.insDot.ctr);
-    }
-
-    if (elem.delDot?.actor === actor) {
-      maxCtr = Math.max(maxCtr, elem.delDot.ctr);
-    }
-
-    maxCtr = Math.max(maxCtr, maxObservedCounterForActorInNode(elem.value, actor));
-  }
-
-  return maxCtr;
 }
 
 function asRecord(value: unknown, path: string): Record<string, unknown> {

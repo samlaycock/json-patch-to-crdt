@@ -4,6 +4,9 @@ import { describe, expect, it } from "bun:test";
 import type { SerializedSyncRecord, SyncEnvelope, SyncJson, SyncRecord } from "./test-utils";
 
 import {
+  intersectVersionVectors,
+  mergeVersionVectors,
+  observedVersionVector,
   applyIntentsToCrdt,
   applyPatch,
   applyPatchAsActor,
@@ -64,6 +67,7 @@ import {
   tryMergeDoc,
   tryMergeState,
   toJson,
+  versionVectorCovers,
   vvHasDot,
   vvMerge,
   JsonValueValidationError,
@@ -141,6 +145,53 @@ describe("dots and version vectors", () => {
     expect(Object.prototype.hasOwnProperty.call(out, "__proto__")).toBeTrue();
     expect(out.__proto__).toBe(2);
     expect(Object.getPrototypeOf(out)).toBeNull();
+  });
+
+  it("observes version vectors across objects and arrays from docs and states", () => {
+    const state = createState(
+      {
+        obj: { nested: 1 },
+        list: ["a", { deep: true }],
+      },
+      { actor: "A" },
+    );
+
+    expect(observedVersionVector(state.doc)).toEqual({ A: state.clock.ctr });
+    expect(observedVersionVector(state)).toEqual({ A: state.clock.ctr });
+  });
+
+  it("observes object tombstone delete dots", () => {
+    const state = createState({ obj: { removed: 1 } }, { actor: "A" });
+    const removed = applyPatch(state, [{ op: "remove", path: "/obj/removed" }]);
+
+    expect(observedVersionVector(removed)).toEqual({ A: removed.clock.ctr });
+  });
+
+  it("observes sequence tombstone delete dots", () => {
+    const state = createState(["a"], { actor: "A" });
+    const removed = applyPatch(state, [{ op: "remove", path: "/0" }], {
+      semantics: "sequential",
+    });
+
+    expect(observedVersionVector(removed)).toEqual({ A: removed.clock.ctr });
+  });
+
+  it("supports public merge, intersection, and coverage checks for version vectors", () => {
+    const left = JSON.parse('{"A":3,"B":1,"__proto__":4}') as VersionVector;
+    const right: VersionVector = { A: 2, B: 5, C: 1 };
+
+    const merged = mergeVersionVectors(left, right) as Record<string, number>;
+    const intersection = intersectVersionVectors(left, right);
+
+    expect(merged.A).toBe(3);
+    expect(merged.B).toBe(5);
+    expect(merged.C).toBe(1);
+    expect(Object.prototype.hasOwnProperty.call(merged, "__proto__")).toBeTrue();
+    expect(merged.__proto__).toBe(4);
+    expect(Object.getPrototypeOf(merged)).toBeNull();
+    expect(intersection).toEqual({ A: 2, B: 1 });
+    expect(versionVectorCovers(merged, intersection)).toBeTrue();
+    expect(versionVectorCovers(intersection, merged)).toBeFalse();
   });
 });
 

@@ -60,6 +60,12 @@ export {
 
 // Merge
 export { MergeError, mergeState, tryMergeState } from "./merge";
+export {
+  observedVersionVector,
+  mergeVersionVectors,
+  intersectVersionVectors,
+  versionVectorCovers,
+} from "./version-vector";
 
 // Tombstone compaction
 export { compactStateTombstones } from "./compact";
