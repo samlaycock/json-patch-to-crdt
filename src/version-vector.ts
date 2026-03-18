@@ -26,10 +26,19 @@ export function observeVersionVectorDot(vv: VersionVector, dot: Dot): void {
   }
 }
 
-/** Inspect a document or state and return the highest observed counter per actor. */
+/**
+ * Inspect a document or state and return the highest observed counter per actor.
+ *
+ * When a `CrdtState` is provided, the returned vector is also seeded from the
+ * state's local clock so callers do not lose counters that have advanced ahead
+ * of the currently materialized document tree.
+ */
 export function observedVersionVector(target: Doc | CrdtState): VersionVector {
   const doc = "doc" in target ? target.doc : target;
   const vv = Object.create(null) as VersionVector;
+  if ("clock" in target) {
+    observeVersionVectorDot(vv, { actor: target.clock.actor, ctr: target.clock.ctr });
+  }
   const stack: Array<{ node: Node; depth: number }> = [{ node: doc.root, depth: 0 }];
 
   while (stack.length > 0) {
@@ -87,7 +96,13 @@ export function mergeVersionVectors(...vectors: readonly VersionVector[]): Versi
   return merged;
 }
 
-/** Derive a causally-stable checkpoint by taking the per-actor minimum. */
+/**
+ * Derive a causally-stable checkpoint by taking the per-actor minimum.
+ *
+ * When called with a single vector the result equals that vector. In practice,
+ * a meaningful shared-stability checkpoint usually needs acknowledgements from
+ * at least two peers or from an explicit quorum.
+ */
 export function intersectVersionVectors(...vectors: readonly VersionVector[]): VersionVector {
   if (vectors.length === 0) {
     return Object.create(null) as VersionVector;
