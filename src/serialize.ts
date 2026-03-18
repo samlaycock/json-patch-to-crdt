@@ -401,10 +401,18 @@ function assertSerializedEnvelopeVersion(
     return;
   }
 
-  const version = readCounter(raw.version, path);
+  const version = readVersion(raw.version, path);
   if (version !== expectedVersion) {
     fail("INVALID_SERIALIZED_SHAPE", path, `unsupported serialized ${label} version '${version}'`);
   }
+}
+
+function readVersion(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    fail("INVALID_SERIALIZED_SHAPE", path, "envelope version must be a non-negative safe integer");
+  }
+
+  return value;
 }
 
 function readDot(value: unknown, path: string): Dot {

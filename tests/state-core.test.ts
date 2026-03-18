@@ -1543,6 +1543,27 @@ describe("serialization", () => {
     expect(stateRejected).toBeTrue();
   });
 
+  it("reports version-specific validation errors for malformed envelope versions", () => {
+    const malformed = {
+      version: "1",
+      root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+    } as unknown as SerializedDoc;
+
+    try {
+      deserializeDoc(malformed);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+        expect(error.path).toBe("/version");
+        expect(error.message).toBe("envelope version must be a non-negative safe integer");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeDoc to reject malformed envelope versions");
+  });
+
   it("offers a non-throwing doc deserialization helper", () => {
     const malformed = {
       root: {
