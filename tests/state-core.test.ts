@@ -453,6 +453,26 @@ describe("clock and state", () => {
     }
   });
 
+  it("rejects __proto__ paths under base semantics without polluting Object.prototype", () => {
+    const state = createState({}, { actor: "A" });
+    const marker = "__json_patch_to_crdt_base_semantics_prototype_pollution_marker__";
+    const prototypeRecord = Object.prototype as Record<string, unknown>;
+
+    delete prototypeRecord[marker];
+
+    try {
+      expect(({} as Record<string, unknown>)[marker]).toBeUndefined();
+      expect(() =>
+        applyPatch(state, [{ op: "add", path: `/__proto__/${marker}`, value: true }], {
+          semantics: "base",
+        }),
+      ).toThrow(PatchError);
+      expect(({} as Record<string, unknown>)[marker]).toBeUndefined();
+    } finally {
+      delete prototypeRecord[marker];
+    }
+  });
+
   it("supports immutable patch application", () => {
     const state = createState({ a: 1 }, { actor: "A" });
     const next = applyPatch(state, [{ op: "replace", path: "/a", value: 2 }]);
