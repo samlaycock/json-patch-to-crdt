@@ -424,6 +424,19 @@ export type DiffOptions = {
    */
   lcsMaxCells?: number;
   /**
+   * Optional guardrail for `arrayStrategy: "lcs-linear"`.
+   * Uses the trimmed unmatched window size
+   * (`(unmatchedBase.length + 1) * (unmatchedNext.length + 1)`) as a proxy for
+   * worst-case work. When the cap is exceeded, the diff falls back to an atomic
+   * array replacement instead of running the linear-space traversal.
+   *
+   * Unlike `lcsMaxCells`, this is opt-in and defaults to no fallback so
+   * existing `lcs-linear` callers keep their current behavior.
+   *
+   * Set to `Number.POSITIVE_INFINITY` to always allow `lcs-linear`.
+   */
+  lcsLinearMaxCells?: number;
+  /**
    * Emit RFC 6902 `move` operations when a deterministic remove/add rewrite is available.
    * Defaults to `false` for backward compatibility.
    */

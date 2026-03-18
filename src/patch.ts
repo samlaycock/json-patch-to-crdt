@@ -273,8 +273,8 @@ export function compileJsonPatchOpToIntent(
  * By default arrays use a deterministic LCS strategy.
  * Pass `{ arrayStrategy: "atomic" }` for single-op array replacement.
  * Pass `{ arrayStrategy: "lcs-linear" }` for a lower-memory LCS variant.
- * Note that `lcs-linear` still runs in `O(n * m)` time and does not have an
- * automatic fallback for very large unmatched windows.
+ * Use `lcsLinearMaxCells` to optionally cap worst-case `lcs-linear` work and
+ * fall back to an atomic array replacement for very large unmatched windows.
  * Pass `{ emitMoves: true }` or `{ emitCopies: true }` to opt into RFC 6902
  * move/copy emission when a deterministic rewrite is available.
  * @param base - The original JSON value.
@@ -364,7 +364,9 @@ function diffValue(
       }
 
       if (arrayStrategy === "lcs-linear") {
-        diffArrayWithLinearLcs(path, frame.base, frame.next, ops, options);
+        if (!diffArrayWithLinearLcs(path, frame.base, frame.next, ops, options)) {
+          ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
+        }
         continue;
       }
 
@@ -652,8 +654,12 @@ function diffArrayWithLinearLcs(
   next: JsonValue[],
   ops: JsonPatchOp[],
   options: DiffOptions,
-): void {
+): boolean {
   const window = trimEqualArrayEdges(base, next);
+  if (!shouldUseLinearLcsDiff(window.unmatchedBaseLength, window.unmatchedNextLength, options)) {
+    return false;
+  }
+
   const steps: ArrayDiffStep[] = [];
   buildArrayEditScriptLinearSpace(
     base,
@@ -666,6 +672,7 @@ function diffArrayWithLinearLcs(
   );
 
   pushArrayPatchOps(path, window.prefixLength, steps, ops, base, options);
+  return true;
 }
 
 function trimEqualArrayEdges(base: JsonValue[], next: JsonValue[]): TrimmedArrayWindow {
@@ -1033,6 +1040,24 @@ function shouldUseLcsDiff(baseLength: number, nextLength: number, lcsMaxCells?: 
 
   const matrixCells = (baseLength + 1) * (nextLength + 1);
   return matrixCells <= cap;
+}
+
+function shouldUseLinearLcsDiff(
+  baseLength: number,
+  nextLength: number,
+  options: DiffOptions,
+): boolean {
+  const cap = options.lcsLinearMaxCells;
+  if (cap === undefined || cap === Number.POSITIVE_INFINITY) {
+    return true;
+  }
+
+  if (!Number.isFinite(cap) || cap < 1) {
+    return false;
+  }
+
+  const estimatedCells = (baseLength + 1) * (nextLength + 1);
+  return estimatedCells <= cap;
 }
 
 function finalizeArrayOps(

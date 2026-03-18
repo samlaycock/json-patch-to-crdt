@@ -102,7 +102,9 @@ For array-heavy snapshots, `diffJsonPatch` and `crdtToJsonPatch` support:
 - `arrayStrategy: "lcs-linear"`: deterministic index-level array edits using a lower-memory linear-space LCS traversal.
 - `arrayStrategy: "atomic"`: replace the whole array with a single patch operation.
 
-`lcsMaxCells` only applies to `arrayStrategy: "lcs"`. If the classic LCS matrix would exceed the configured cap, the diff falls back to an atomic array `replace`. Use `lcs-linear` when you want index-level patches for larger arrays without allocating the full matrix, but note that it still has `O(n * m)` time complexity and does not automatically fall back for very large unmatched windows.
+`lcsMaxCells` only applies to `arrayStrategy: "lcs"`. If the classic LCS matrix for the trimmed unmatched window would exceed the configured cap, the diff falls back to an atomic array `replace`.
+
+`lcsLinearMaxCells` is the matching opt-in guardrail for `arrayStrategy: "lcs-linear"`. It uses the same trimmed unmatched-window estimate, but caps worst-case runtime instead of matrix allocation. When the cap is exceeded, `lcs-linear` also falls back to an atomic array `replace`. If you do not set `lcsLinearMaxCells`, `lcs-linear` keeps its previous behavior and will continue to run without an automatic fallback.
 
 `diffJsonPatch` keeps the existing `add`/`remove`/`replace` output by default. Set
 `emitMoves` and/or `emitCopies` to opt into deterministic RFC 6902 `move`/`copy`

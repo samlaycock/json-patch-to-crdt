@@ -551,6 +551,22 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "/arr/1250", value: -1 }]);
   });
 
+  it("uses the linear guardrail without reusing lcsMaxCells", () => {
+    const baseArr = Array.from({ length: 2_500 }, (_, idx) => idx);
+    const nextArr = [...baseArr];
+    nextArr[1_250] = -1;
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs-linear",
+      lcsMaxCells: 1,
+      lcsLinearMaxCells: 4,
+    });
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr/1250", value: -1 }]);
+  });
+
   it("avoids atomic fallback for large unmatched windows with linear-space LCS", () => {
     const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
     const nextArr = [...baseArr.slice(1), baseArr[0]!];
@@ -563,6 +579,20 @@ describe("diffJsonPatch", () => {
       { op: "remove", path: "/arr/0" },
       { op: "add", path: "/arr/3999", value: 0 },
     ]);
+  });
+
+  it("can fall back to atomic replacement for large unmatched windows with linear-space LCS", () => {
+    const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
+    const nextArr = [...baseArr.slice(1), baseArr[0]!];
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs-linear",
+      lcsLinearMaxCells: 1_000_000,
+    });
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr", value: nextArr }]);
   });
 
   it("handles single unmatched base elements against large next arrays with linear-space LCS", () => {
