@@ -102,6 +102,14 @@ import {
   versionKey,
 } from "./test-utils";
 
+function makeDeepArray(depth: number, leaf: JsonValue): JsonValue {
+  let value = leaf;
+  for (let i = 0; i < depth; i++) {
+    value = [value];
+  }
+  return value;
+}
+
 describe("compileJsonPatchToIntent", () => {
   it("compiles add/remove/replace to intents", () => {
     const base: JsonValue = { list: ["a"], obj: {} };
@@ -328,6 +336,53 @@ describe("diffJsonPatch", () => {
       { op: "add", path: "/k1500", value: 1_500 },
       { op: "replace", path: "/k0750", value: -1 },
     ]);
+  });
+
+  it("handles deeply nested differing objects without overflowing the stack", () => {
+    const depth = 12_000;
+    const base = makeDeepObject(depth, 0);
+    const next = makeDeepObject(depth, 1);
+
+    const ops = diffJsonPatch(base, next);
+
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ op: "replace", value: 1 });
+    expect(parseJsonPointer(ops[0]!.path)).toEqual(Array(depth).fill("child"));
+  });
+
+  it("handles deeply nested differing arrays without overflowing the stack", () => {
+    const depth = 12_000;
+    const base = makeDeepArray(depth, 0);
+    const next = makeDeepArray(depth, 1);
+
+    const ops = diffJsonPatch(base, next);
+
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toEqual({ op: "replace", path: "/0", value: makeDeepArray(depth - 1, 1) });
+    expect(applyJsonPatch(base, ops)).toEqual(next);
+  });
+
+  it("keeps deep move and copy emission working without recursion hazards", () => {
+    const depth = 12_000;
+    const deepArray = makeDeepArray(depth, 1);
+    const deepObject = makeDeepObject(depth, 2);
+    const base: JsonValue = { before: deepArray, source: deepObject };
+    const next: JsonValue = { after: deepArray, copy: deepObject, source: deepObject };
+
+    const ops = diffJsonPatch(base, next, { emitMoves: true, emitCopies: true });
+
+    expect(ops).toEqual([
+      { op: "move", from: "/before", path: "/after" },
+      { op: "copy", from: "/source", path: "/copy" },
+    ]);
+  });
+
+  it("throws a typed depth error when diff traversal exceeds the supported maximum", () => {
+    const tooDeep = MAX_TRAVERSAL_DEPTH + 1;
+
+    expect(() => diffJsonPatch(makeDeepObject(tooDeep, 0), makeDeepObject(tooDeep, 1))).toThrow(
+      TraversalDepthError,
+    );
   });
 
   it("replaces arrays as atomic values when requested", () => {
