@@ -88,6 +88,7 @@ import {
   cloneJson,
   cloneVv,
   compactHistory,
+  captureThrown,
   createSyncRecord,
   dot,
   expectDeltaApplies,
@@ -240,18 +241,19 @@ describe("clock and state", () => {
 
   it("rejects non-plain object initial values in strict jsonValidation mode", () => {
     for (const sample of nonPlainObjectCases()) {
-      try {
-        createState({ value: sample.create() } as unknown as JsonValue, {
-          actor: "A",
-          jsonValidation: "strict",
-        });
-        throw new Error(`Expected strict validation to reject ${sample.label}`);
-      } catch (error) {
-        expect(error).toBeInstanceOf(JsonValueValidationError);
-        if (error instanceof JsonValueValidationError) {
-          expect(error.path).toBe("/value");
-          expect(error.detail).toContain("non-plain object");
-        }
+      const error = captureThrown(
+        () =>
+          createState({ value: sample.create() } as unknown as JsonValue, {
+            actor: "A",
+            jsonValidation: "strict",
+          }),
+        `Expected strict validation to reject ${sample.label}`,
+      );
+
+      expect(error).toBeInstanceOf(JsonValueValidationError);
+      if (error instanceof JsonValueValidationError) {
+        expect(error.path).toBe("/value");
+        expect(error.detail).toContain("non-plain object");
       }
     }
   });
@@ -269,7 +271,7 @@ describe("clock and state", () => {
       } as unknown as JsonValue,
       { actor: "A", jsonValidation: "normalize" },
     );
-    const rootState = createState(nonPlainObjectCases()[0]!.create() as unknown as JsonValue, {
+    const rootState = createState(new Date("2020-01-01T00:00:00.000Z") as unknown as JsonValue, {
       actor: "A",
       jsonValidation: "normalize",
     });
