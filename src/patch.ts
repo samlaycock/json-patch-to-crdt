@@ -86,6 +86,7 @@ interface ArrayRewriteEntry {
   value: JsonValue;
   key: string;
   currentIndex: number;
+  bucketIndex: number;
 }
 
 interface ArrayRewriteState {
@@ -1290,6 +1291,7 @@ function createArrayRewriteState(base: JsonValue[]): ArrayRewriteState {
       value,
       key: stableJsonValueKey(value, structuralKeyCache),
       currentIndex,
+      bucketIndex: -1,
     };
     insertArrayRewriteBucketEntry(buckets, entry);
     return entry;
@@ -1329,6 +1331,7 @@ function insertArrayRewriteBucketEntry(
   }
 
   bucket.splice(low, 0, entry);
+  reindexArrayRewriteBucketPositions(bucket, low);
 }
 
 function removeArrayRewriteBucketEntry(
@@ -1340,14 +1343,25 @@ function removeArrayRewriteBucketEntry(
     return;
   }
 
-  const bucketIndex = bucket.indexOf(entry);
-  if (bucketIndex === -1) {
+  const bucketIndex = entry.bucketIndex;
+  if (bucketIndex < 0 || bucketIndex >= bucket.length || bucket[bucketIndex] !== entry) {
     return;
   }
 
   bucket.splice(bucketIndex, 1);
   if (bucket.length === 0) {
     buckets.delete(entry.key);
+    entry.bucketIndex = -1;
+    return;
+  }
+
+  entry.bucketIndex = -1;
+  reindexArrayRewriteBucketPositions(bucket, bucketIndex);
+}
+
+function reindexArrayRewriteBucketPositions(bucket: ArrayRewriteEntry[], startIndex: number): void {
+  for (let index = startIndex; index < bucket.length; index++) {
+    bucket[index]!.bucketIndex = index;
   }
 }
 
@@ -1389,10 +1403,11 @@ function applyArrayOptimizationOp(
       value,
       key: getArrayRewriteValueKey(working, op.value),
       currentIndex: index,
+      bucketIndex: -1,
     };
     working.entries.splice(index, 0, entry);
-    insertArrayRewriteBucketEntry(working.buckets, entry);
     reindexArrayRewriteEntries(working.entries, index + 1);
+    insertArrayRewriteBucketEntry(working.buckets, entry);
     return;
   }
 
@@ -1430,10 +1445,11 @@ function applyArrayOptimizationOp(
       value: structuredClone(source.value),
       key: source.key,
       currentIndex: index,
+      bucketIndex: -1,
     };
     working.entries.splice(index, 0, entry);
-    insertArrayRewriteBucketEntry(working.buckets, entry);
     reindexArrayRewriteEntries(working.entries, index + 1);
+    insertArrayRewriteBucketEntry(working.buckets, entry);
     return;
   }
 
@@ -1452,10 +1468,9 @@ function applyArrayOptimizationOp(
 
     removeArrayRewriteBucketEntry(working.buckets, entry);
     const index = getArrayOpIndex(op.path, arrayPath);
-    entry.currentIndex = index;
     working.entries.splice(index, 0, entry);
-    insertArrayRewriteBucketEntry(working.buckets, entry);
     reindexArrayRewriteEntries(working.entries, Math.min(fromIndex, index));
+    insertArrayRewriteBucketEntry(working.buckets, entry);
     return;
   }
 
