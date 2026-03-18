@@ -38,6 +38,7 @@ export {
   compileJsonPatchToIntent,
   PatchCompileError,
   jsonEquals,
+  stableJsonValueKey,
 } from "./patch";
 
 // Node-level materialization helper.

@@ -392,7 +392,7 @@ function runNestedRewriteScenario(width: number, runs: number): void {
   const baselineOps = diffJsonPatch(base, next);
   const rewriteOps = diffJsonPatch(base, next, rewriteOptions);
 
-  if (!rewriteOps.every((op) => op.op === "move" || op.op === "copy")) {
+  if (rewriteOps.length > 0 && !rewriteOps.every((op) => op.op === "move" || op.op === "copy")) {
     throw new Error("nested rewrite benchmark expected move/copy-only output");
   }
 

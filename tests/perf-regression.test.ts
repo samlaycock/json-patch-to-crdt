@@ -16,9 +16,9 @@ import {
   cloneDoc,
   compileJsonPatchToIntent,
   docFromJson,
+  stableJsonValueKey,
 } from "../src/internals";
 import { setMaterializeObserverForTests } from "../src/materialize";
-import { stableJsonValueKey } from "../src/patch";
 
 describe("performance regressions", () => {
   it("memoizes structural fingerprints for repeated nested nodes", () => {
