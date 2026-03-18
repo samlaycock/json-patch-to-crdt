@@ -20,6 +20,7 @@ import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot } from "./dot";
 import { stringifyJsonPointer } from "./patch";
+import { observedVersionVector } from "./version-vector";
 
 class SharedElementMetadataMismatchError extends Error {
   readonly path: string;
@@ -197,7 +198,7 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
 }
 
 function maxObservedCtrForActor(doc: Doc, actor: ActorId, a: CrdtState, b: CrdtState): number {
-  let best = maxCtrInNodeForActor(doc.root, actor);
+  let best = observedVersionVector(doc)[actor] ?? 0;
 
   if (a.clock.actor === actor && a.clock.ctr > best) {
     best = a.clock.ctr;
@@ -205,51 +206,6 @@ function maxObservedCtrForActor(doc: Doc, actor: ActorId, a: CrdtState, b: CrdtS
 
   if (b.clock.actor === actor && b.clock.ctr > best) {
     best = b.clock.ctr;
-  }
-
-  return best;
-}
-
-function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
-  let best = 0;
-  const stack: Array<{ node: Node; depth: number }> = [{ node, depth: 0 }];
-
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    assertTraversalDepth(frame.depth);
-
-    if (frame.node.kind === "lww") {
-      if (frame.node.dot.actor === actor && frame.node.dot.ctr > best) {
-        best = frame.node.dot.ctr;
-      }
-      continue;
-    }
-
-    if (frame.node.kind === "obj") {
-      for (const entry of frame.node.entries.values()) {
-        if (entry.dot.actor === actor && entry.dot.ctr > best) {
-          best = entry.dot.ctr;
-        }
-        stack.push({ node: entry.node, depth: frame.depth + 1 });
-      }
-
-      for (const tomb of frame.node.tombstone.values()) {
-        if (tomb.actor === actor && tomb.ctr > best) {
-          best = tomb.ctr;
-        }
-      }
-      continue;
-    }
-
-    for (const elem of frame.node.elems.values()) {
-      if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
-        best = elem.insDot.ctr;
-      }
-      if (elem.delDot?.actor === actor && elem.delDot.ctr > best) {
-        best = elem.delDot.ctr;
-      }
-      stack.push({ node: elem.value, depth: frame.depth + 1 });
-    }
   }
 
   return best;

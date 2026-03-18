@@ -1,22 +1,6 @@
 import type { Dot, ElemId, VersionVector } from "./types";
 
-function readVvCounter(vv: VersionVector, actor: string): number | undefined {
-  if (!Object.prototype.hasOwnProperty.call(vv, actor)) {
-    return undefined;
-  }
-
-  const counter = vv[actor];
-  return typeof counter === "number" ? counter : undefined;
-}
-
-function writeVvCounter(vv: VersionVector, actor: string, counter: number): void {
-  Object.defineProperty(vv, actor, {
-    configurable: true,
-    enumerable: true,
-    value: counter,
-    writable: true,
-  });
-}
+import { mergeVersionVectors, readVersionVectorCounter } from "./version-vector";
 
 // total order for LWW (tie-break actor lexicographically)
 export function compareDot(a: Dot, b: Dot): number {
@@ -28,21 +12,11 @@ export function compareDot(a: Dot, b: Dot): number {
 }
 
 export function vvHasDot(vv: VersionVector, d: Dot): boolean {
-  return (readVvCounter(vv, d.actor) ?? 0) >= d.ctr;
+  return (readVersionVectorCounter(vv, d.actor) ?? 0) >= d.ctr;
 }
 
 export function vvMerge(a: VersionVector, b: VersionVector): VersionVector {
-  const out = Object.create(null) as VersionVector;
-
-  for (const [actor, ctr] of Object.entries(a)) {
-    writeVvCounter(out, actor, ctr);
-  }
-
-  for (const [actor, ctr] of Object.entries(b)) {
-    writeVvCounter(out, actor, Math.max(readVvCounter(out, actor) ?? 0, ctr));
-  }
-
-  return out;
+  return mergeVersionVectors(a, b);
 }
 
 export function dotToElemId(d: Dot): ElemId {

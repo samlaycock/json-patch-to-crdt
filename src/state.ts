@@ -26,7 +26,7 @@ import type {
 } from "./types";
 
 import { createClock, cloneClock } from "./clock";
-import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
+import { TraversalDepthError, toDepthApplyError } from "./depth";
 import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
 import {
   JsonValueValidationError,
@@ -44,6 +44,7 @@ import {
 } from "./patch";
 import { rgaIdAtIndex, rgaLength } from "./rga";
 import { ROOT_KEY } from "./types";
+import { observedVersionVector } from "./version-vector";
 
 /** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
 export class PatchError extends Error {
@@ -261,7 +262,7 @@ export function tryApplyPatchAsActor(
   patch: JsonPatchOp[],
   options: ApplyPatchAsActorOptions = {},
 ): TryApplyPatchAsActorResult {
-  const observedCtr = maxCtrInNodeForActor(doc.root, actor);
+  const observedCtr = observedVersionVector(doc)[actor] ?? 0;
   const start = Math.max(vv[actor] ?? 0, observedCtr);
 
   const baseState: CrdtState = {
@@ -1047,51 +1048,6 @@ function mergePointerPaths(basePointer: string, nestedPointer: string): string {
   }
 
   return `${basePointer}${nestedPointer}`;
-}
-
-function maxCtrInNodeForActor(node: Node, actor: ActorId): number {
-  let best = 0;
-  const stack: Array<{ node: Node; depth: number }> = [{ node, depth: 0 }];
-
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    assertTraversalDepth(frame.depth);
-
-    if (frame.node.kind === "lww") {
-      if (frame.node.dot.actor === actor && frame.node.dot.ctr > best) {
-        best = frame.node.dot.ctr;
-      }
-      continue;
-    }
-
-    if (frame.node.kind === "obj") {
-      for (const entry of frame.node.entries.values()) {
-        if (entry.dot.actor === actor && entry.dot.ctr > best) {
-          best = entry.dot.ctr;
-        }
-        stack.push({ node: entry.node, depth: frame.depth + 1 });
-      }
-
-      for (const tomb of frame.node.tombstone.values()) {
-        if (tomb.actor === actor && tomb.ctr > best) {
-          best = tomb.ctr;
-        }
-      }
-      continue;
-    }
-
-    for (const elem of frame.node.elems.values()) {
-      if (elem.insDot.actor === actor && elem.insDot.ctr > best) {
-        best = elem.insDot.ctr;
-      }
-      if (elem.delDot?.actor === actor && elem.delDot.ctr > best) {
-        best = elem.delDot.ctr;
-      }
-      stack.push({ node: elem.value, depth: frame.depth + 1 });
-    }
-  }
-
-  return best;
 }
 
 function toApplyError(error: unknown): ApplyError {
