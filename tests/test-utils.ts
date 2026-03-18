@@ -117,6 +117,16 @@ export function nonPlainObjectCases(): readonly NonPlainObjectCase[] {
   ];
 }
 
+export function captureThrown(thunk: () => void, message: string): unknown {
+  try {
+    thunk();
+  } catch (error) {
+    return error;
+  }
+
+  throw new Error(message);
+}
+
 export function applyJsonPatch(base: JsonValue, patch: JsonPatchOp[]): JsonValue {
   let doc: JsonValue = cloneJson(base);
 

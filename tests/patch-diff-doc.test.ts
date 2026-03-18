@@ -80,6 +80,7 @@ import {
   applyIncomingWithDedupe,
   applyJsonPatch,
   asSyncJson,
+  captureThrown,
   cloneJson,
   cloneVv,
   compactHistory,
@@ -299,19 +300,20 @@ describe("diffJsonPatch", () => {
 
   it("rejects non-plain runtime values in strict jsonValidation mode", () => {
     for (const sample of nonPlainObjectCases()) {
-      try {
-        diffJsonPatch(
-          { value: sample.create() } as unknown as JsonValue,
-          { value: sample.create() } as unknown as JsonValue,
-          { jsonValidation: "strict" },
-        );
-        throw new Error(`Expected strict validation to reject ${sample.label}`);
-      } catch (error) {
-        expect(error).toBeInstanceOf(JsonValueValidationError);
-        if (error instanceof JsonValueValidationError) {
-          expect(error.path).toBe("/value");
-          expect(error.detail).toContain("non-plain object");
-        }
+      const error = captureThrown(
+        () =>
+          diffJsonPatch(
+            { value: sample.create() } as unknown as JsonValue,
+            { value: sample.create() } as unknown as JsonValue,
+            { jsonValidation: "strict" },
+          ),
+        `Expected strict validation to reject ${sample.label}`,
+      );
+
+      expect(error).toBeInstanceOf(JsonValueValidationError);
+      if (error instanceof JsonValueValidationError) {
+        expect(error.path).toBe("/value");
+        expect(error.detail).toContain("non-plain object");
       }
     }
   });
@@ -337,7 +339,7 @@ describe("diffJsonPatch", () => {
 
     expect(ops).toEqual([]);
     expect(
-      diffJsonPatch(nonPlainObjectCases()[0]!.create() as unknown as JsonValue, null, {
+      diffJsonPatch(new Date("2020-01-01T00:00:00.000Z") as unknown as JsonValue, null, {
         jsonValidation: "normalize",
       }),
     ).toEqual([]);
