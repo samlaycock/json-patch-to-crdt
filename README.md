@@ -129,6 +129,15 @@ console.log(toJson(next));
 // { counter: 2 }
 ```
 
+Persisted snapshot compatibility:
+
+- `serializeState(...)` emits a versioned envelope.
+- `deserializeState(...)` accepts both the current versioned format and legacy unversioned snapshots.
+- Future envelope versions are rejected until an explicit migration path is added.
+
+The same compatibility contract applies to the lower-level `serializeDoc(...)` and
+`deserializeDoc(...)` helpers exported from `json-patch-to-crdt/internals`.
+
 ## Error Handling
 
 `applyPatch` throws `PatchError` when a patch cannot be applied.
@@ -201,6 +210,7 @@ import { crdtToJsonPatch, applyPatchAsActor } from "json-patch-to-crdt/internals
 - Arrays use a CRDT sequence internally; concurrent inserts are preserved.
 - Patches are interpreted relative to a snapshot (RFC-style sequential execution by default).
 - Merge assumes replicas come from the same origin state (use `forkState`).
+- Persisted CRDT snapshots currently use envelope version `1`; legacy unversioned snapshots remain readable.
 
 ## License
 
