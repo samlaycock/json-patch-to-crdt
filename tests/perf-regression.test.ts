@@ -62,6 +62,46 @@ describe("performance regressions", () => {
     expect(patch).toEqual([{ op: "replace", path: "/arr/750", value: -1 }]);
   });
 
+  it("avoids repeated deep equality rescans for duplicate-heavy array copy rewrites", () => {
+    const hits = { count: 0 };
+    const makeValue = (id: number): JsonValue => {
+      const value = {} as Record<string, JsonValue>;
+      Object.defineProperty(value, "id", {
+        enumerable: true,
+        get: () => {
+          hits.count += 1;
+          return id;
+        },
+      });
+      Object.defineProperty(value, "payload", {
+        enumerable: true,
+        get: () => {
+          hits.count += 1;
+          return [id % 5, id % 7, { tag: id % 11 }] as JsonValue;
+        },
+      });
+      return value as JsonValue;
+    };
+
+    const prefix = Array.from({ length: 120 }, (_, idx) => makeValue(idx));
+    const duplicateValues = Array.from({ length: 6 }, () => makeValue(9_999));
+    const base: JsonValue = { arr: [...prefix, duplicateValues[0]!, duplicateValues[1]!] };
+    const next: JsonValue = { arr: [...prefix, ...duplicateValues] };
+
+    const patch = diffJsonPatch(base, next, {
+      arrayStrategy: "lcs",
+      emitCopies: true,
+    });
+
+    expect(patch).toEqual([
+      { op: "copy", from: "/arr/120", path: "/arr/122" },
+      { op: "copy", from: "/arr/120", path: "/arr/123" },
+      { op: "copy", from: "/arr/120", path: "/arr/124" },
+      { op: "copy", from: "/arr/120", path: "/arr/125" },
+    ]);
+    expect(hits.count).toBeLessThan(700);
+  });
+
   it("still falls back to atomic replace when the unmatched LCS window is too large", () => {
     const baseArr = Array.from({ length: 600 }, (_, idx) => idx);
     const nextArr = [...baseArr].reverse();

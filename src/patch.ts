@@ -82,6 +82,18 @@ interface ObjectKeyGroups {
   readonly nextOnlyKeys: string[];
 }
 
+interface ArrayRewriteEntry {
+  value: JsonValue;
+  key: string;
+  currentIndex: number;
+}
+
+interface ArrayRewriteState {
+  readonly entries: ArrayRewriteEntry[];
+  readonly buckets: Map<string, ArrayRewriteEntry[]>;
+  readonly structuralKeyCache: WeakMap<object, string>;
+}
+
 /** Structured compile error used to map patch validation failures to typed reasons. */
 export class PatchCompileError extends Error {
   readonly reason: PatchErrorReason;
@@ -1077,17 +1089,17 @@ function finalizeArrayOps(
   }
 
   const out: JsonPatchOp[] = [];
-  // Keep prefix/suffix elements in the shadow array so copy detection can
+  // Keep prefix/suffix elements in the shadow state so copy detection can
   // reference stable sources outside the trimmed diff window.
-  const working = base.slice();
+  const working = createArrayRewriteState(base);
 
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i]!;
     const next = ops[i + 1];
 
     if (op.op === "remove" && next && next.op === "add") {
-      const removedValue = working[getArrayOpIndex(op.path, arrayPath)]!;
-      const valuesMatch = jsonEquals(removedValue, next.value);
+      const removedEntry = working.entries[getArrayOpIndex(op.path, arrayPath)]!;
+      const valuesMatch = removedEntry.key === getArrayRewriteValueKey(working, next.value);
 
       if (op.path === next.path) {
         const replaceOp: JsonPatchOp = { op: "replace", path: op.path, value: next.value };
@@ -1125,8 +1137,8 @@ function finalizeArrayOps(
       const sourceIndex = removeIndex - (targetIndex <= removeIndex ? 1 : 0);
       const matchesPendingRemove =
         sourceIndex >= 0 &&
-        sourceIndex < working.length &&
-        jsonEquals(working[sourceIndex]!, op.value);
+        sourceIndex < working.entries.length &&
+        working.entries[sourceIndex]!.key === getArrayRewriteValueKey(working, op.value);
 
       if (options.emitMoves && matchesPendingRemove) {
         const moveOp: JsonPatchOp = {
@@ -1270,14 +1282,79 @@ function compactArrayOps(ops: JsonPatchOp[]): JsonPatchOp[] {
   return out;
 }
 
-function findArrayCopySourceIndex(working: JsonValue[], value: JsonValue): number {
-  for (let index = 0; index < working.length; index++) {
-    if (jsonEquals(working[index]!, value)) {
-      return index;
+function createArrayRewriteState(base: JsonValue[]): ArrayRewriteState {
+  const structuralKeyCache = new WeakMap<object, string>();
+  const buckets = new Map<string, ArrayRewriteEntry[]>();
+  const entries = base.map((value, currentIndex) => {
+    const entry: ArrayRewriteEntry = {
+      value,
+      key: stableJsonValueKey(value, structuralKeyCache),
+      currentIndex,
+    };
+    insertArrayRewriteBucketEntry(buckets, entry);
+    return entry;
+  });
+
+  return { entries, buckets, structuralKeyCache };
+}
+
+function getArrayRewriteValueKey(state: ArrayRewriteState, value: JsonValue): string {
+  return stableJsonValueKey(value, state.structuralKeyCache);
+}
+
+function findArrayCopySourceIndex(state: ArrayRewriteState, value: JsonValue): number {
+  return state.buckets.get(getArrayRewriteValueKey(state, value))?.[0]?.currentIndex ?? -1;
+}
+
+function insertArrayRewriteBucketEntry(
+  buckets: Map<string, ArrayRewriteEntry[]>,
+  entry: ArrayRewriteEntry,
+): void {
+  let bucket = buckets.get(entry.key);
+  if (!bucket) {
+    bucket = [];
+    buckets.set(entry.key, bucket);
+  }
+
+  let low = 0;
+  let high = bucket.length;
+
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (bucket[mid]!.currentIndex < entry.currentIndex) {
+      low = mid + 1;
+    } else {
+      high = mid;
     }
   }
 
-  return -1;
+  bucket.splice(low, 0, entry);
+}
+
+function removeArrayRewriteBucketEntry(
+  buckets: Map<string, ArrayRewriteEntry[]>,
+  entry: ArrayRewriteEntry,
+): void {
+  const bucket = buckets.get(entry.key);
+  if (!bucket) {
+    return;
+  }
+
+  const bucketIndex = bucket.indexOf(entry);
+  if (bucketIndex === -1) {
+    return;
+  }
+
+  bucket.splice(bucketIndex, 1);
+  if (bucket.length === 0) {
+    buckets.delete(entry.key);
+  }
+}
+
+function reindexArrayRewriteEntries(entries: ArrayRewriteEntry[], startIndex: number): void {
+  for (let index = startIndex; index < entries.length; index++) {
+    entries[index]!.currentIndex = index;
+  }
 }
 
 function getArrayOpIndex(ptr: string, arrayPath: string[]): number {
@@ -1301,48 +1378,84 @@ function getArrayOpIndex(ptr: string, arrayPath: string[]): number {
 }
 
 function applyArrayOptimizationOp(
-  working: JsonValue[],
+  working: ArrayRewriteState,
   op: JsonPatchOp,
   arrayPath: string[],
 ): void {
   if (op.op === "add") {
-    working.splice(getArrayOpIndex(op.path, arrayPath), 0, structuredClone(op.value));
+    const index = getArrayOpIndex(op.path, arrayPath);
+    const value = structuredClone(op.value);
+    const entry: ArrayRewriteEntry = {
+      value,
+      key: getArrayRewriteValueKey(working, op.value),
+      currentIndex: index,
+    };
+    working.entries.splice(index, 0, entry);
+    insertArrayRewriteBucketEntry(working.buckets, entry);
+    reindexArrayRewriteEntries(working.entries, index + 1);
     return;
   }
 
   if (op.op === "remove") {
-    working.splice(getArrayOpIndex(op.path, arrayPath), 1);
+    const index = getArrayOpIndex(op.path, arrayPath);
+    const [removedEntry] = working.entries.splice(index, 1);
+    if (removedEntry) {
+      removeArrayRewriteBucketEntry(working.buckets, removedEntry);
+    }
+    reindexArrayRewriteEntries(working.entries, index);
     return;
   }
 
   if (op.op === "replace") {
-    working[getArrayOpIndex(op.path, arrayPath)] = structuredClone(op.value);
+    const index = getArrayOpIndex(op.path, arrayPath);
+    const entry = working.entries[index]!;
+    removeArrayRewriteBucketEntry(working.buckets, entry);
+    entry.value = structuredClone(op.value);
+    entry.key = getArrayRewriteValueKey(working, op.value);
+    insertArrayRewriteBucketEntry(working.buckets, entry);
     return;
   }
 
   if (op.op === "copy") {
     const fromIndex = getArrayOpIndex(op.from, arrayPath);
-    if (fromIndex < 0 || fromIndex >= working.length) {
+    if (fromIndex < 0 || fromIndex >= working.entries.length) {
       throw new Error(
-        `applyArrayOptimizationOp: copy from index ${fromIndex} is out of bounds (length ${working.length})`,
+        `applyArrayOptimizationOp: copy from index ${fromIndex} is out of bounds (length ${working.entries.length})`,
       );
     }
 
-    const value = structuredClone(working[fromIndex]!);
-    working.splice(getArrayOpIndex(op.path, arrayPath), 0, value);
+    const index = getArrayOpIndex(op.path, arrayPath);
+    const source = working.entries[fromIndex]!;
+    const entry: ArrayRewriteEntry = {
+      value: structuredClone(source.value),
+      key: source.key,
+      currentIndex: index,
+    };
+    working.entries.splice(index, 0, entry);
+    insertArrayRewriteBucketEntry(working.buckets, entry);
+    reindexArrayRewriteEntries(working.entries, index + 1);
     return;
   }
 
   if (op.op === "move") {
     const fromIndex = getArrayOpIndex(op.from, arrayPath);
-    if (fromIndex < 0 || fromIndex >= working.length) {
+    if (fromIndex < 0 || fromIndex >= working.entries.length) {
       throw new Error(
-        `applyArrayOptimizationOp: move from index ${fromIndex} is out of bounds (length ${working.length})`,
+        `applyArrayOptimizationOp: move from index ${fromIndex} is out of bounds (length ${working.entries.length})`,
       );
     }
 
-    const [value] = working.splice(fromIndex, 1);
-    working.splice(getArrayOpIndex(op.path, arrayPath), 0, value!);
+    const [entry] = working.entries.splice(fromIndex, 1);
+    if (!entry) {
+      throw new Error(`applyArrayOptimizationOp: move from index ${fromIndex} did not resolve`);
+    }
+
+    removeArrayRewriteBucketEntry(working.buckets, entry);
+    const index = getArrayOpIndex(op.path, arrayPath);
+    entry.currentIndex = index;
+    working.entries.splice(index, 0, entry);
+    insertArrayRewriteBucketEntry(working.buckets, entry);
+    reindexArrayRewriteEntries(working.entries, Math.min(fromIndex, index));
     return;
   }
 

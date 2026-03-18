@@ -94,6 +94,84 @@ function buildRotateLeftArrayEdit(length: number): { base: JsonValue; next: Json
   };
 }
 
+function buildDuplicateHeavyValue(id: number): JsonValue {
+  return {
+    kind: "dup",
+    id,
+    payload: {
+      bucket: id % 5,
+      flags: [id % 2 === 0, id % 3 === 0],
+    },
+  };
+}
+
+function buildDuplicateHeavyAppendEdit(length: number): { base: JsonValue; next: JsonValue } {
+  const stablePrefixLength = Math.max(length - 2, 1);
+  const stablePrefix = Array.from({ length: stablePrefixLength }, (_, idx) => ({
+    kind: "stable",
+    idx,
+  }));
+  const duplicateValues = Array.from({ length: 6 }, () => buildDuplicateHeavyValue(9_999));
+
+  return {
+    base: { arr: [...stablePrefix, duplicateValues[0]!, duplicateValues[1]!] },
+    next: { arr: [...stablePrefix, ...duplicateValues] },
+  };
+}
+
+function buildDuplicateHeavyInsertEdit(length: number): { base: JsonValue; next: JsonValue } {
+  const stablePrefixLength = Math.max(length - 6, 1);
+  const stablePrefix = Array.from({ length: stablePrefixLength }, (_, idx) => ({
+    kind: "stable",
+    idx,
+  }));
+  const stableSuffix = Array.from({ length: 4 }, (_, idx) => ({
+    kind: "suffix",
+    idx,
+  }));
+  const duplicateValues = Array.from({ length: 4 }, () => buildDuplicateHeavyValue(7_777));
+
+  return {
+    base: {
+      arr: [...stablePrefix, duplicateValues[0]!, duplicateValues[1]!, ...stableSuffix],
+    },
+    next: {
+      arr: [...stablePrefix, ...duplicateValues, ...stableSuffix],
+    },
+  };
+}
+
+function buildDuplicateHeavyReorderEdit(length: number): { base: JsonValue; next: JsonValue } {
+  const stablePrefixLength = Math.max(length - 5, 1);
+  const stablePrefix = Array.from({ length: stablePrefixLength }, (_, idx) => ({
+    kind: "stable",
+    idx,
+  }));
+
+  return {
+    base: {
+      arr: [
+        ...stablePrefix,
+        buildDuplicateHeavyValue(101),
+        buildDuplicateHeavyValue(202),
+        buildDuplicateHeavyValue(101),
+        buildDuplicateHeavyValue(202),
+        buildDuplicateHeavyValue(303),
+      ],
+    },
+    next: {
+      arr: [
+        buildDuplicateHeavyValue(202),
+        ...stablePrefix,
+        buildDuplicateHeavyValue(101),
+        buildDuplicateHeavyValue(202),
+        buildDuplicateHeavyValue(101),
+        buildDuplicateHeavyValue(303),
+      ],
+    },
+  };
+}
+
 function runDiff(base: JsonValue, next: JsonValue, options: DiffOptions): JsonPatchOp[] {
   return diffJsonPatch(base, next, options);
 }
@@ -167,10 +245,57 @@ function runGuardrailScenario(length: number): void {
   );
 }
 
+function runDuplicateHeavyRewriteScenarios(length: number, runs: number): void {
+  const scenarios = [
+    {
+      name: "dup-copy-append",
+      ...buildDuplicateHeavyAppendEdit(length),
+      options: { arrayStrategy: "lcs", emitCopies: true } satisfies DiffOptions,
+    },
+    {
+      name: "dup-copy-insert",
+      ...buildDuplicateHeavyInsertEdit(length),
+      options: { arrayStrategy: "lcs", emitCopies: true } satisfies DiffOptions,
+    },
+    {
+      name: "dup-move-reorder",
+      ...buildDuplicateHeavyReorderEdit(length),
+      options: { arrayStrategy: "lcs", emitMoves: true, emitCopies: true } satisfies DiffOptions,
+    },
+  ];
+
+  const stats: BenchmarkStats[] = [];
+
+  for (const scenario of scenarios) {
+    const firstPatch = runDiff(scenario.base, scenario.next, scenario.options);
+    const secondPatch = runDiff(scenario.base, scenario.next, scenario.options);
+    if (JSON.stringify(firstPatch) !== JSON.stringify(secondPatch)) {
+      throw new Error(`${scenario.name} produced non-deterministic rewrite output`);
+    }
+
+    stats.push(
+      measure(scenario.name, runs, () => runDiff(scenario.base, scenario.next, scenario.options)),
+    );
+  }
+
+  console.log("Duplicate-heavy rewrite microbenchmark (emitMoves/emitCopies)");
+  console.log(`length=${length} runs=${runs}`);
+  logTable(stats);
+  for (const scenario of scenarios) {
+    const patch = runDiff(scenario.base, scenario.next, scenario.options);
+    console.log(
+      `${scenario.name} ops=${patch.length} first=${summarizePatchOp(patch[0])} last=${summarizePatchOp(patch[patch.length - 1])}`,
+    );
+  }
+}
+
 const mediumLength = parsePositiveIntEnv("BENCH_ARRAY_DIFF_MEDIUM_SIZE", 1_800);
 const largeLength = parsePositiveIntEnv("BENCH_ARRAY_DIFF_LARGE_SIZE", 4_000);
+const duplicateLength = parsePositiveIntEnv("BENCH_ARRAY_DIFF_DUPLICATE_SIZE", 1_500);
 const runs = parsePositiveIntEnv("BENCH_ARRAY_DIFF_RUNS", 12);
 
 runMatrixVsLinearScenario(mediumLength, runs);
 console.log("");
 runGuardrailScenario(largeLength);
+console.log("");
+runDuplicateHeavyRewriteScenarios(duplicateLength, runs);

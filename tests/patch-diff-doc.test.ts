@@ -825,6 +825,41 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("keeps duplicate-heavy array move/copy rewrites deterministic across runs", () => {
+    const base: JsonValue = {
+      arr: [
+        { kind: "anchor", value: 0 },
+        { kind: "dup", value: 1 },
+        { kind: "dup", value: 2 },
+        { kind: "dup", value: 1 },
+        { kind: "dup", value: 2 },
+        { kind: "tail", value: 9 },
+      ],
+    };
+    const next: JsonValue = {
+      arr: [
+        { kind: "dup", value: 2 },
+        { kind: "anchor", value: 0 },
+        { kind: "dup", value: 1 },
+        { kind: "dup", value: 2 },
+        { kind: "dup", value: 1 },
+        { kind: "dup", value: 2 },
+        { kind: "tail", value: 9 },
+      ],
+    };
+
+    const options = {
+      arrayStrategy: "lcs",
+      emitMoves: true,
+      emitCopies: true,
+    } as const;
+    const patch1 = diffJsonPatch(base, next, options);
+    const patch2 = diffJsonPatch(base, next, options);
+
+    expect(patch1).toEqual(patch2);
+    expect(applyJsonPatch(base, patch1)).toEqual(next);
+  });
+
   it("can append elements with LCS", () => {
     const base: JsonValue = { arr: [1] };
     const next: JsonValue = { arr: [1, 2, 3] };
