@@ -3,7 +3,14 @@ import { describe, expect, it } from "bun:test";
 import type { JsonPatchOp, JsonValue } from "../src";
 import type { IntentOp, RgaElem, RgaSeq } from "../src/internals";
 
-import { applyPatch, compactStateTombstones, createState, diffJsonPatch, toJson } from "../src";
+import {
+  applyPatch,
+  applyPatchInPlace,
+  compactStateTombstones,
+  createState,
+  diffJsonPatch,
+  toJson,
+} from "../src";
 import {
   applyIntentsToCrdt,
   cloneDoc,
@@ -242,6 +249,61 @@ describe("performance regressions", () => {
       idx: 2_499,
       nested: { label: "v2499", even: false },
     });
+  });
+
+  it("avoids eager full-document materialization for narrow explicit-base sequential patches", () => {
+    const base = createState(
+      {
+        meta: { version: 0 },
+        untouched: {
+          huge: Array.from({ length: 2_500 }, (_, idx) => ({
+            idx,
+            nested: { label: `v${idx}`, even: idx % 2 === 0 },
+          })),
+        },
+      },
+      { actor: "perf" },
+    );
+    const head = applyPatch(base, [{ op: "replace", path: "/meta/version", value: 1 }]);
+    let untouchedTraversalCalls = 0;
+    const originalMapValues = Object.getOwnPropertyDescriptor(Map.prototype, "values")!.value as <
+      K,
+      V,
+    >(
+      this: Map<K, V>,
+    ) => ReturnType<Map<K, V>["values"]>;
+
+    Map.prototype.values = function values<K, V>(this: Map<K, V>) {
+      if (this.size === 2_500) {
+        untouchedTraversalCalls += 1;
+      }
+
+      return originalMapValues.call(this);
+    };
+
+    try {
+      applyPatchInPlace(head, [{ op: "replace", path: "/meta/version", value: 2 }], {
+        base,
+        semantics: "sequential",
+        testAgainst: "base",
+        atomic: false,
+      });
+    } finally {
+      Map.prototype.values = originalMapValues;
+    }
+
+    const json = toJson(head) as {
+      meta: { version: number };
+      untouched: { huge: Array<{ idx: number; nested: { label: string; even: boolean } }> };
+    };
+
+    expect(json.meta.version).toBe(2);
+    expect(json.untouched.huge[2_499]).toEqual({
+      idx: 2_499,
+      nested: { label: "v2499", even: false },
+    });
+
+    expect(untouchedTraversalCalls).toBe(0);
   });
 
   it("compacts high-volume stable tombstones without changing materialized output", () => {
