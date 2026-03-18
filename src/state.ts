@@ -35,13 +35,15 @@ import {
 } from "./json-value";
 import { materialize } from "./materialize";
 import {
+  ARRAY_INDEX_TOKEN_PATTERN,
   PatchCompileError,
   compileJsonPatchOpToIntent,
   compileJsonPatchToIntent,
-  getAtJson,
-  mapLookupErrorToPatchReason,
   parseJsonPointer,
+  stringifyJsonPointer,
 } from "./patch";
+import { rgaIdAtIndex, rgaLinearizeIds } from "./rga";
+import { ROOT_KEY } from "./types";
 
 /** Error thrown when a JSON Patch cannot be applied. Includes structured conflict metadata. */
 export class PatchError extends Error {
@@ -339,13 +341,7 @@ function applyPatchInternal(
       : null;
     const session: SequentialApplySession = {
       pointerCache: new Map(),
-      baseShadowParentCache: new Map(),
-      headShadowParentCache: new Map(),
     };
-    let sequentialHeadJson = materialize(state.doc.root);
-    let sequentialBaseJson = explicitBaseState
-      ? materialize(explicitBaseState.doc.root)
-      : sequentialHeadJson;
 
     for (const [opIndex, op] of runtimePatch.entries()) {
       const baseDoc = explicitBaseState ? explicitBaseState.doc : state.doc;
@@ -354,8 +350,6 @@ function applyPatchInternal(
         op,
         options,
         baseDoc,
-        sequentialBaseJson,
-        sequentialHeadJson,
         explicitBaseState,
         opIndex,
         session,
@@ -363,8 +357,6 @@ function applyPatchInternal(
       if (!step.ok) {
         return step;
       }
-      sequentialBaseJson = step.baseJson;
-      sequentialHeadJson = step.headJson;
     }
 
     return { ok: true };
@@ -388,12 +380,8 @@ function applyPatchInternal(
   );
 }
 
-type ShadowParentCache = Map<string, JsonValue[] | Record<string, JsonValue>>;
-
 type SequentialApplySession = {
   pointerCache: Map<string, string[]>;
-  baseShadowParentCache: ShadowParentCache;
-  headShadowParentCache: ShadowParentCache;
 };
 
 function applyPatchOpSequential(
@@ -401,14 +389,17 @@ function applyPatchOpSequential(
   op: JsonPatchOp,
   options: ApplyPatchOptions,
   baseDoc: Doc,
-  baseJson: JsonValue,
-  headJson: JsonValue,
   explicitBaseState: CrdtState | null,
   opIndex: number,
   session: SequentialApplySession,
-): ApplyPatchOpSequentialResult {
+): ApplyResult {
   if (op.op === "move") {
-    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex, session.pointerCache);
+    const fromResolved = resolveValueAtPointerInDoc(
+      baseDoc,
+      op.from,
+      opIndex,
+      session.pointerCache,
+    );
     if (!fromResolved.ok) {
       return fromResolved;
     }
@@ -417,8 +408,6 @@ function applyPatchOpSequential(
     const removeRes = applySinglePatchOpSequentialStep(
       state,
       baseDoc,
-      baseJson,
-      headJson,
       { op: "remove", path: op.from },
       options,
       explicitBaseState,
@@ -429,7 +418,7 @@ function applyPatchOpSequential(
       return removeRes;
     }
 
-    // `move` resolves `path` after removal; compile/add against the post-remove shadow.
+    // `move` resolves `path` after removal; compile/add against the post-remove doc state.
     const addOp: JsonPatchOp = {
       op: "add",
       path: op.path,
@@ -439,8 +428,6 @@ function applyPatchOpSequential(
       return applySinglePatchOpSequentialStep(
         state,
         state.doc,
-        removeRes.baseJson,
-        removeRes.headJson,
         addOp,
         options,
         null,
@@ -452,8 +439,6 @@ function applyPatchOpSequential(
     const headAddRes = applySinglePatchOpSequentialStep(
       state,
       state.doc,
-      removeRes.headJson,
-      removeRes.headJson,
       addOp,
       options,
       null,
@@ -466,7 +451,6 @@ function applyPatchOpSequential(
 
     const shadowAddRes = applySinglePatchOpExplicitShadowStep(
       explicitBaseState,
-      removeRes.baseJson,
       addOp,
       options,
       opIndex,
@@ -476,15 +460,16 @@ function applyPatchOpSequential(
       return shadowAddRes;
     }
 
-    return {
-      ok: true,
-      baseJson: shadowAddRes.baseJson,
-      headJson: headAddRes.headJson,
-    };
+    return { ok: true };
   }
 
   if (op.op === "copy") {
-    const fromResolved = resolveValueAtPointer(baseJson, op.from, opIndex, session.pointerCache);
+    const fromResolved = resolveValueAtPointerInDoc(
+      baseDoc,
+      op.from,
+      opIndex,
+      session.pointerCache,
+    );
     if (!fromResolved.ok) {
       return fromResolved;
     }
@@ -492,8 +477,6 @@ function applyPatchOpSequential(
     return applySinglePatchOpSequentialStep(
       state,
       baseDoc,
-      baseJson,
-      headJson,
       {
         op: "add",
         path: op.path,
@@ -509,8 +492,6 @@ function applyPatchOpSequential(
   return applySinglePatchOpSequentialStep(
     state,
     baseDoc,
-    baseJson,
-    headJson,
     op,
     options,
     explicitBaseState,
@@ -519,24 +500,16 @@ function applyPatchOpSequential(
   );
 }
 
-type ApplyPatchOpSequentialResult =
-  | { ok: true; baseJson: JsonValue; headJson: JsonValue }
-  | ApplyError;
-
 function applySinglePatchOpSequentialStep(
   state: CrdtState,
   baseDoc: Doc,
-  baseJson: JsonValue,
-  headJson: JsonValue,
   op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
   options: ApplyPatchOptions,
   explicitBaseState: CrdtState | null,
   opIndex: number,
   session: SequentialApplySession,
-): ApplyPatchOpSequentialResult {
-  // `move`/`copy` are decomposed in `applyPatchOpSequential` before reaching this
-  // helper, so single-op compile semantics are equivalent for add/remove/replace/test.
-  const compiled = compilePreparedIntents(baseJson, [op], "base", session.pointerCache, opIndex);
+): ApplyResult {
+  const compiled = compilePreparedSingleIntentFromDoc(baseDoc, op, session.pointerCache, opIndex);
   if (!compiled.ok) {
     return compiled;
   }
@@ -569,39 +542,22 @@ function applySinglePatchOpSequentialStep(
     }
   }
 
-  if (op.op === "test") {
-    return { ok: true, baseJson, headJson };
-  }
-
-  const baseShadowCache = explicitBaseState
-    ? session.baseShadowParentCache
-    : session.headShadowParentCache;
-  const nextBaseJson = applyJsonPatchOpToShadow(baseJson, op, baseShadowCache, {
-    pointerCache: session.pointerCache,
-    opIndex,
-  });
-  const nextHeadJson = explicitBaseState
-    ? applyJsonPatchOpToShadow(headJson, op, session.headShadowParentCache, {
-        pointerCache: session.pointerCache,
-        opIndex,
-      })
-    : nextBaseJson;
-  return {
-    ok: true,
-    baseJson: nextBaseJson,
-    headJson: nextHeadJson,
-  };
+  return { ok: true };
 }
 
 function applySinglePatchOpExplicitShadowStep(
   explicitBaseState: CrdtState,
-  baseJson: JsonValue,
   op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
   options: ApplyPatchOptions,
   opIndex: number,
   session: SequentialApplySession,
-): { ok: true; baseJson: JsonValue } | ApplyError {
-  const compiled = compilePreparedIntents(baseJson, [op], "base", session.pointerCache, opIndex);
+): ApplyResult {
+  const compiled = compilePreparedSingleIntentFromDoc(
+    explicitBaseState.doc,
+    op,
+    session.pointerCache,
+    opIndex,
+  );
   if (!compiled.ok) {
     return compiled;
   }
@@ -619,164 +575,178 @@ function applySinglePatchOpExplicitShadowStep(
     return shadowStep;
   }
 
-  if (op.op === "test") {
-    return { ok: true, baseJson };
+  return { ok: true };
+}
+
+function resolveValueAtPointerInDoc(
+  doc: Doc,
+  pointer: string,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): { ok: true; value: JsonValue } | ApplyError {
+  let path: string[];
+  try {
+    path = parsePointerWithCache(pointer, pointerCache);
+  } catch (error) {
+    return toPointerParseApplyError(error, pointer, opIndex);
+  }
+
+  const resolved = resolveNodeAtPath(doc.root, path);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      ...resolved.error,
+      path: pointer,
+      opIndex,
+    };
   }
 
   return {
     ok: true,
-    baseJson: applyJsonPatchOpToShadow(baseJson, op, session.baseShadowParentCache, {
-      pointerCache: session.pointerCache,
-      opIndex,
-    }),
+    value: materialize(resolved.node),
   };
 }
 
-function applyJsonPatchOpToShadow(
-  baseJson: JsonValue,
+function compilePreparedSingleIntentFromDoc(
+  baseDoc: Doc,
   op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
-  parentCache: ShadowParentCache,
-  pointerContext: { pointerCache: Map<string, string[]>; opIndex: number },
-): JsonValue {
+  pointerCache: Map<string, string[]>,
+  opIndex: number,
+): { ok: true; intents: IntentOp[] } | ApplyError {
   let path: string[];
   try {
-    path = parsePointerWithCache(op.path, pointerContext.pointerCache);
+    path = parsePointerWithCache(op.path, pointerCache);
   } catch (error) {
-    throw toPointerParseCompileError(error, op.path, pointerContext.opIndex);
+    return toPointerParseApplyError(error, op.path, opIndex);
+  }
+
+  if (op.op === "test") {
+    return {
+      ok: true,
+      intents: [{ t: "Test", path, value: op.value }],
+    };
   }
 
   if (path.length === 0) {
-    parentCache.clear();
-    if (op.op === "test") {
-      return baseJson;
-    }
-
     if (op.op === "remove") {
-      return null;
+      return {
+        ok: false,
+        code: 409,
+        reason: "INVALID_TARGET",
+        message: "remove at root path is not supported in RFC-compliant mode",
+        path: op.path,
+        opIndex,
+      };
     }
 
-    return structuredClone(op.value);
+    return {
+      ok: true,
+      intents: [{ t: "ObjSet", path: [], key: ROOT_KEY, value: op.value }],
+    };
   }
 
-  const pathPointer = op.path;
   const parentPath = path.slice(0, -1);
-  const parentPointer = pointerParent(pathPointer);
+  const parentPointer = stringifyJsonPointer(parentPath);
   const key = path[path.length - 1]!;
-  const parent = resolveShadowParent(baseJson, parentPath, parentPointer, parentCache);
+  const resolvedParent =
+    parentPath.length === 0
+      ? { ok: true as const, node: baseDoc.root }
+      : resolveNodeAtPath(baseDoc.root, parentPath);
+  if (!resolvedParent.ok) {
+    return {
+      ok: false,
+      ...resolvedParent.error,
+      path: parentPointer,
+      opIndex,
+    };
+  }
 
-  if (Array.isArray(parent)) {
-    const idx = key === "-" ? parent.length : Number(key);
-    if (!Number.isInteger(idx)) {
-      throw new Error(`Invalid array index ${key}`);
+  const parentNode = resolvedParent.node;
+  if (parentNode.kind === "seq") {
+    const parsedIndex = parseArrayIndexTokenForDoc(
+      key,
+      op.op,
+      rgaLinearizeIds(parentNode).length,
+      op.path,
+      opIndex,
+    );
+    if (!parsedIndex.ok) {
+      return parsedIndex;
     }
 
     if (op.op === "add") {
-      parent.splice(idx, 0, structuredClone(op.value));
-      invalidateArrayShadowParentCache(parentCache, parentPointer);
-      return baseJson;
+      return {
+        ok: true,
+        intents: [{ t: "ArrInsert", path: parentPath, index: parsedIndex.index, value: op.value }],
+      };
     }
 
     if (op.op === "remove") {
-      parent.splice(idx, 1);
-      invalidateArrayShadowParentCache(parentCache, parentPointer);
-      return baseJson;
+      return {
+        ok: true,
+        intents: [{ t: "ArrDelete", path: parentPath, index: parsedIndex.index }],
+      };
     }
 
-    if (op.op === "replace") {
-      parent[idx] = structuredClone(op.value);
-      invalidateShadowPointerCache(parentCache, pathPointer);
-      return baseJson;
-    }
-
-    return baseJson;
+    return {
+      ok: true,
+      intents: [{ t: "ArrReplace", path: parentPath, index: parsedIndex.index, value: op.value }],
+    };
   }
 
-  const obj = parent as Record<string, JsonValue>;
-  if (op.op === "add" || op.op === "replace") {
-    obj[key] = structuredClone(op.value);
-    invalidateShadowPointerCache(parentCache, pathPointer);
-    return baseJson;
+  if (parentNode.kind !== "obj") {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_TARGET",
+      message: `expected object or array parent at ${parentPointer}`,
+      path: parentPointer,
+      opIndex,
+    };
+  }
+
+  if (key === "__proto__") {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_POINTER",
+      message: `unsafe object key at ${op.path}`,
+      path: op.path,
+      opIndex,
+    };
+  }
+
+  const entry = parentNode.entries.get(key);
+  if ((op.op === "replace" || op.op === "remove") && !entry) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_TARGET",
+      message: `missing key ${key} at ${parentPointer}`,
+      path: op.path,
+      opIndex,
+    };
   }
 
   if (op.op === "remove") {
-    delete obj[key];
-    invalidateShadowPointerCache(parentCache, pathPointer);
-    return baseJson;
+    return {
+      ok: true,
+      intents: [{ t: "ObjRemove", path: parentPath, key }],
+    };
   }
 
-  return baseJson;
-}
-
-function resolveShadowParent(
-  baseJson: JsonValue,
-  parentPath: string[],
-  parentPointer: string,
-  parentCache: ShadowParentCache,
-): JsonValue[] | Record<string, JsonValue> {
-  const cachedParent = parentCache.get(parentPointer);
-  if (cachedParent !== undefined) {
-    return cachedParent;
-  }
-
-  const parentValue = parentPath.length === 0 ? baseJson : getAtJson(baseJson, parentPath);
-  if (!Array.isArray(parentValue) && !(parentValue && typeof parentValue === "object")) {
-    throw new Error(
-      `Cannot mutate JSON shadow at non-container parent ${parentPointer || "<root>"}`,
-    );
-  }
-
-  parentCache.set(parentPointer, parentValue);
-  return parentValue;
-}
-
-function invalidateShadowPointerCache(parentCache: ShadowParentCache, pointer: string): void {
-  if (pointer === "") {
-    parentCache.clear();
-    return;
-  }
-
-  const pointerPrefix = `${pointer}/`;
-  for (const cachedPointer of parentCache.keys()) {
-    if (cachedPointer === pointer || cachedPointer.startsWith(pointerPrefix)) {
-      parentCache.delete(cachedPointer);
-    }
-  }
-}
-
-function invalidateArrayShadowParentCache(
-  parentCache: ShadowParentCache,
-  parentPointer: string,
-): void {
-  // Splice mutates the parent array in place, so the cached parent reference stays valid.
-  // Only descendants under that parent are invalidated because numeric indices may shift.
-  if (parentPointer === "") {
-    for (const cachedPointer of parentCache.keys()) {
-      if (cachedPointer !== "") {
-        parentCache.delete(cachedPointer);
-      }
-    }
-    return;
-  }
-
-  const pointerPrefix = `${parentPointer}/`;
-  for (const cachedPointer of parentCache.keys()) {
-    if (cachedPointer.startsWith(pointerPrefix)) {
-      parentCache.delete(cachedPointer);
-    }
-  }
-}
-
-function pointerParent(pointer: string): string {
-  if (pointer === "") {
-    return "";
-  }
-
-  const lastSlash = pointer.lastIndexOf("/");
-  if (lastSlash <= 0) {
-    return "";
-  }
-
-  return pointer.slice(0, lastSlash);
+  return {
+    ok: true,
+    intents: [
+      {
+        t: "ObjSet",
+        path: parentPath,
+        key,
+        value: op.value,
+        mode: op.op,
+      },
+    ],
+  };
 }
 
 function parsePointerWithCache(pointer: string, pointerCache: Map<string, string[]>): string[] {
@@ -791,27 +761,142 @@ function parsePointerWithCache(pointer: string, pointerCache: Map<string, string
   return parsedPath.slice();
 }
 
-function resolveValueAtPointer(
-  baseJson: JsonValue,
-  pointer: string,
-  opIndex: number,
-  pointerCache: Map<string, string[]>,
-): { ok: true; value: JsonValue } | ApplyError {
-  let path: string[];
-  try {
-    path = parsePointerWithCache(pointer, pointerCache);
-  } catch (error) {
-    return toPointerParseApplyError(error, pointer, opIndex);
+function resolveNodeAtPath(
+  root: Node,
+  path: string[],
+):
+  | { ok: true; node: Node }
+  | { ok: false; error: Omit<ApplyError, "ok" | "code"> & { code: 409 } } {
+  let current = root;
+
+  for (const segment of path) {
+    if (current.kind === "obj") {
+      const entry = current.entries.get(segment);
+      if (!entry) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "MISSING_PARENT",
+            message: `Missing key '${segment}'`,
+          },
+        };
+      }
+
+      current = entry.node;
+      continue;
+    }
+
+    if (current.kind === "seq") {
+      if (!ARRAY_INDEX_TOKEN_PATTERN.test(segment)) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "INVALID_POINTER",
+            message: `Expected array index, got '${segment}'`,
+          },
+        };
+      }
+
+      const index = Number(segment);
+      const elemId = rgaIdAtIndex(current, index);
+      if (!Number.isSafeInteger(index) || elemId === undefined) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "OUT_OF_BOUNDS",
+            message: `Index out of bounds at '${segment}'`,
+          },
+        };
+      }
+
+      current = current.elems.get(elemId)!.value;
+      continue;
+    }
+
+    return {
+      ok: false,
+      error: {
+        code: 409,
+        reason: "INVALID_TARGET",
+        message: `Cannot traverse into non-container at '${segment}'`,
+      },
+    };
   }
 
-  try {
-    return {
-      ok: true,
-      value: getAtJson(baseJson, path),
-    };
-  } catch (error) {
-    return toPointerLookupApplyError(error, pointer, opIndex);
+  return { ok: true, node: current };
+}
+
+function parseArrayIndexTokenForDoc(
+  token: string,
+  op: "add" | "remove" | "replace",
+  arrLength: number,
+  path: string,
+  opIndex: number,
+): { ok: true; index: number } | ApplyError {
+  if (token === "-") {
+    if (op !== "add") {
+      return {
+        ok: false,
+        code: 409,
+        reason: "INVALID_POINTER",
+        message: `'-' index is only valid for add at ${path}`,
+        path,
+        opIndex,
+      };
+    }
+
+    return { ok: true, index: Number.POSITIVE_INFINITY };
   }
+
+  if (!ARRAY_INDEX_TOKEN_PATTERN.test(token)) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_POINTER",
+      message: `expected array index at ${path}`,
+      path,
+      opIndex,
+    };
+  }
+
+  const index = Number(token);
+  if (!Number.isSafeInteger(index)) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "OUT_OF_BOUNDS",
+      message: `array index is too large at ${path}`,
+      path,
+      opIndex,
+    };
+  }
+
+  if (op === "add") {
+    if (index > arrLength) {
+      return {
+        ok: false,
+        code: 409,
+        reason: "OUT_OF_BOUNDS",
+        message: `index out of bounds at ${path}; expected 0..${arrLength}`,
+        path,
+        opIndex,
+      };
+    }
+  } else if (index >= arrLength) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "OUT_OF_BOUNDS",
+      message: `index out of bounds at ${path}; expected 0..${Math.max(arrLength - 1, 0)}`,
+      path,
+      opIndex,
+    };
+  }
+
+  return { ok: true, index };
 }
 
 function bumpClockCounter(state: CrdtState, ctr: number): void {
@@ -1010,32 +1095,6 @@ function toPointerParseApplyError(error: unknown, pointer: string, opIndex: numb
     code: 409,
     reason: "INVALID_POINTER",
     message: error instanceof Error ? error.message : "invalid pointer",
-    path: pointer,
-    opIndex,
-  };
-}
-
-function toPointerParseCompileError(
-  error: unknown,
-  pointer: string,
-  opIndex: number,
-): PatchCompileError {
-  return new PatchCompileError(
-    "INVALID_POINTER",
-    error instanceof Error ? error.message : "invalid pointer",
-    pointer,
-    opIndex,
-  );
-}
-
-function toPointerLookupApplyError(error: unknown, pointer: string, opIndex: number): ApplyError {
-  const mapped = mapLookupErrorToPatchReason(error);
-
-  return {
-    ok: false,
-    code: 409,
-    reason: mapped.reason,
-    message: mapped.message,
     path: pointer,
     opIndex,
   };
