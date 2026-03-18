@@ -22,8 +22,9 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [k: string]: JsonValue }
 /**
  * Runtime handling mode for non-JSON inputs received through `any` / untyped callers.
  * - `"none"`: keep current behavior (no extra runtime guardrails).
- * - `"strict"`: reject invalid values (e.g. `NaN`, `Infinity`, `undefined`).
- * - `"normalize"`: coerce invalid values into JSON-safe output.
+ * - `"strict"`: reject invalid values (e.g. `NaN`, `Infinity`, `undefined`, or non-plain objects like `Date`).
+ * - `"normalize"`: coerce invalid values into JSON-safe output. Non-plain objects become `null`
+ *   at the root or in arrays, and are omitted from object properties.
  */
 export type JsonValidationMode = "none" | "strict" | "normalize";
 

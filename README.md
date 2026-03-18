@@ -147,6 +147,34 @@ try {
 
 If you prefer non-throwing results, use `tryApplyPatch(...)` / `tryMergeState(...)`.
 
+## Runtime JSON Validation
+
+`createState`, `applyPatch`, `diffJsonPatch`, and `crdtToJsonPatch` accept a
+`jsonValidation` option for callers that may pass runtime values through `any`.
+
+- `"none"` keeps the current behavior with no extra runtime validation.
+- `"strict"` rejects values that are not valid JSON, including non-finite
+  numbers, `undefined`, and non-plain objects such as `Date`, `Map`, `Set`,
+  `RegExp`, typed arrays, and class instances.
+- `"normalize"` coerces invalid values into JSON-safe output. Non-finite
+  numbers become `null`. Non-plain objects also become `null` at the root or
+  inside arrays, and are omitted from object properties.
+
+```ts
+import { createState, toJson } from "json-patch-to-crdt";
+
+const unsafeInput = {
+  keep: true,
+  nested: { when: new Date("2020-01-01") },
+  arr: [new Uint8Array([1, 2, 3])],
+} as any;
+
+const state = createState(unsafeInput, { actor: "A", jsonValidation: "normalize" });
+
+console.log(toJson(state));
+// { keep: true, nested: {}, arr: [null] }
+```
+
 ## API Overview
 
 Main exports most apps need:
