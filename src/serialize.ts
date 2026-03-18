@@ -20,6 +20,8 @@ import { TraversalDepthError, assertTraversalDepth } from "./depth";
 import { dotToElemId } from "./dot";
 
 const HEAD_ELEM_ID = "HEAD";
+const SERIALIZED_DOC_VERSION = 1 as const;
+const SERIALIZED_STATE_VERSION = 1 as const;
 
 function createSerializedRecord<T>(): Record<string, T> {
   return Object.create(null) as Record<string, T>;
@@ -49,20 +51,21 @@ export class DeserializeError extends Error {
 
 /** Serialize a CRDT document to a JSON-safe representation (Maps become plain objects). */
 export function serializeDoc(doc: Doc): SerializedDoc {
-  return { root: serializeNode(doc.root) };
+  return {
+    version: SERIALIZED_DOC_VERSION,
+    root: serializeNode(doc.root),
+  };
 }
 
 /** Reconstruct a CRDT document from its serialized form. */
 export function deserializeDoc(data: SerializedDoc): Doc {
-  if (!isRecord(data)) {
-    fail("INVALID_SERIALIZED_SHAPE", "/", "serialized doc must be an object");
-  }
+  const raw = readSerializedDocEnvelope(data);
 
-  if (!("root" in data)) {
+  if (!("root" in raw)) {
     fail("INVALID_SERIALIZED_SHAPE", "/root", "serialized doc is missing root");
   }
 
-  return { root: deserializeNode(data.root, "/root", 0) };
+  return { root: deserializeNode(raw.root, "/root", 0) };
 }
 
 /** Non-throwing `deserializeDoc` variant with typed validation details. */
@@ -82,6 +85,7 @@ export function tryDeserializeDoc(data: SerializedDoc): TryDeserializeDocResult 
 /** Serialize a full CRDT state (document + clock) to a JSON-safe representation. */
 export function serializeState(state: CrdtState): SerializedState {
   return {
+    version: SERIALIZED_STATE_VERSION,
     doc: serializeDoc(state.doc),
     clock: { actor: state.clock.actor, ctr: state.clock.ctr },
   };
@@ -89,22 +93,20 @@ export function serializeState(state: CrdtState): SerializedState {
 
 /** Reconstruct a full CRDT state from its serialized form, restoring the clock. */
 export function deserializeState(data: SerializedState): CrdtState {
-  if (!isRecord(data)) {
-    fail("INVALID_SERIALIZED_SHAPE", "/", "serialized state must be an object");
-  }
+  const raw = readSerializedStateEnvelope(data);
 
-  if (!("doc" in data)) {
+  if (!("doc" in raw)) {
     fail("INVALID_SERIALIZED_SHAPE", "/doc", "serialized state is missing doc");
   }
 
-  if (!("clock" in data)) {
+  if (!("clock" in raw)) {
     fail("INVALID_SERIALIZED_SHAPE", "/clock", "serialized state is missing clock");
   }
 
-  const clockRaw = asRecord(data.clock, "/clock");
+  const clockRaw = asRecord(raw.clock, "/clock");
   const actor = readActor(clockRaw.actor, "/clock/actor");
   const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
-  const doc = deserializeDoc(data.doc);
+  const doc = deserializeDoc(raw.doc as SerializedDoc);
   const observedCtr = maxObservedCounterForActorInNode(doc.root, actor);
   const clock = createClock(actor, Math.max(ctr, observedCtr));
   return { doc, clock };
@@ -167,6 +169,18 @@ function serializeNode(node: Doc["root"]): SerializedNode {
   }
 
   return { kind: "seq", elems };
+}
+
+function readSerializedDocEnvelope(data: SerializedDoc): Record<string, unknown> {
+  const raw = asRecord(data, "/");
+  assertSerializedEnvelopeVersion(raw, "/version", SERIALIZED_DOC_VERSION, "doc");
+  return raw;
+}
+
+function readSerializedStateEnvelope(data: SerializedState): Record<string, unknown> {
+  const raw = asRecord(data, "/");
+  assertSerializedEnvelopeVersion(raw, "/version", SERIALIZED_STATE_VERSION, "state");
+  return raw;
 }
 
 function deserializeNode(node: unknown, path: string, depth: number): Node {
@@ -372,6 +386,30 @@ function maxObservedCounterForActorInNode(node: Node, actor: string): number {
 function asRecord(value: unknown, path: string): Record<string, unknown> {
   if (!isRecord(value)) {
     fail("INVALID_SERIALIZED_SHAPE", path, "expected object");
+  }
+
+  return value;
+}
+
+function assertSerializedEnvelopeVersion(
+  raw: Record<string, unknown>,
+  path: string,
+  expectedVersion: number,
+  label: "doc" | "state",
+): void {
+  if (!("version" in raw)) {
+    return;
+  }
+
+  const version = readVersion(raw.version, path);
+  if (version !== expectedVersion) {
+    fail("INVALID_SERIALIZED_SHAPE", path, `unsupported serialized ${label} version '${version}'`);
+  }
+}
+
+function readVersion(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    fail("INVALID_SERIALIZED_SHAPE", path, "envelope version must be a non-negative safe integer");
   }
 
   return value;

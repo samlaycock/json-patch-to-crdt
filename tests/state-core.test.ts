@@ -1237,6 +1237,17 @@ describe("serialization", () => {
     expect(() => JSON.stringify(payload)).not.toThrow();
   });
 
+  it("emits explicit envelope versions for serialized docs and states", () => {
+    const doc = docFromJsonWithDot({ list: ["a", "b"], meta: { ok: true } }, dot("A", 1));
+    const state = createState({ counter: 1 }, { actor: "A" });
+    const serializedDoc = serializeDoc(doc);
+    const serializedState = serializeState(state);
+
+    expect(Reflect.get(serializedDoc as object, "version")).toBe(1);
+    expect(Reflect.get(serializedState as object, "version")).toBe(1);
+    expect(Reflect.get(serializedState.doc as object, "version")).toBe(1);
+  });
+
   it("serializes unsafe object keys without mutating serialized prototypes", () => {
     const value = JSON.parse(
       '{"__proto__":{"x":1},"constructor":{"prototype":{"polluted":true}}}',
@@ -1313,6 +1324,21 @@ describe("serialization", () => {
     const next = applyPatch(restored, [{ op: "replace", path: "/a", value: 2 }]);
     expect(toJson(restored)).toEqual({ a: 1 });
     expect(toJson(next)).toEqual({ a: 2 });
+  });
+
+  it("accepts legacy unversioned doc and state payloads", () => {
+    const doc = docFromJsonWithDot({ list: ["a", "b"], meta: { ok: true } }, dot("A", 1));
+    const state = createState({ counter: 1 }, { actor: "A" });
+    const versionedDoc = serializeDoc(doc);
+    const versionedState = serializeState(state);
+    const legacyDoc = { root: versionedDoc.root } as SerializedDoc;
+    const legacyState = {
+      doc: { root: versionedState.doc.root } as SerializedDoc,
+      clock: versionedState.clock,
+    };
+
+    expect(materialize(deserializeDoc(legacyDoc).root)).toEqual(materialize(doc.root));
+    expect(toJson(deserializeState(legacyState).doc)).toEqual({ counter: 1 });
   });
 
   it("repairs stale serialized clock counters during state deserialization", () => {
@@ -1474,6 +1500,68 @@ describe("serialization", () => {
     }
 
     throw new Error("Expected deserializeState to throw for invalid clock shape");
+  });
+
+  it("rejects unsupported serialized envelope versions with typed path context", () => {
+    const malformedDoc = {
+      version: 999,
+      root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+    } as unknown as SerializedDoc;
+    let docRejected = false;
+
+    try {
+      deserializeDoc(malformedDoc);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+        expect(error.path).toBe("/version");
+      }
+      docRejected = true;
+    }
+
+    expect(docRejected).toBeTrue();
+
+    const malformedState = {
+      version: 999,
+      doc: { version: 1, root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } } },
+      clock: { actor: "A", ctr: 1 },
+    } as unknown;
+    let stateRejected = false;
+
+    try {
+      deserializeState(malformedState as never);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+        expect(error.path).toBe("/version");
+      }
+      stateRejected = true;
+    }
+
+    expect(stateRejected).toBeTrue();
+  });
+
+  it("reports version-specific validation errors for malformed envelope versions", () => {
+    const malformed = {
+      version: "1",
+      root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+    } as unknown as SerializedDoc;
+
+    try {
+      deserializeDoc(malformed);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+        expect(error.path).toBe("/version");
+        expect(error.message).toBe("envelope version must be a non-negative safe integer");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeDoc to reject malformed envelope versions");
   });
 
   it("offers a non-throwing doc deserialization helper", () => {
