@@ -362,6 +362,22 @@ describe("diffJsonPatch", () => {
     expect(applyJsonPatch(base, ops)).toEqual(next);
   });
 
+  it("handles arrays containing deeply nested object elements without overflowing the stack", () => {
+    const depth = 12_000;
+    const base: JsonValue = { arr: [makeDeepObject(depth, 0), "stable"] };
+    const next: JsonValue = { arr: [makeDeepObject(depth, 1), "stable"] };
+
+    const ops = diffJsonPatch(base, next);
+
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ op: "replace", path: "/arr/0" });
+    if (ops[0]?.op !== "replace") {
+      throw new Error("Expected replace op for deep object array element");
+    }
+
+    expect(readDeepObjectLeaf(ops[0].value, depth)).toBe(1);
+  });
+
   it("keeps deep move and copy emission working without recursion hazards", () => {
     const depth = 12_000;
     const deepArray = makeDeepArray(depth, 1);

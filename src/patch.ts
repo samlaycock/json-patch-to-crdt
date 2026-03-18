@@ -375,15 +375,20 @@ function diffValue(
     const baseIsObject = isPlainObject(frame.base);
     const nextIsObject = isPlainObject(frame.next);
     if (!baseIsObject || !nextIsObject) {
-      if (jsonEquals(frame.base, frame.next)) {
-        continue;
-      }
-
       ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
       continue;
     }
 
     const { sharedKeys, baseOnlyKeys, nextOnlyKeys } = collectObjectKeys(frame.base, frame.next);
+    const hasStructuralChanges = baseOnlyKeys.length > 0 || nextOnlyKeys.length > 0;
+    if (
+      !hasStructuralChanges &&
+      (path.length === 0 || sharedKeys.length > 1) &&
+      jsonEquals(frame.base, frame.next)
+    ) {
+      continue;
+    }
+
     emitObjectStructuralOps(
       path,
       frame.base,
