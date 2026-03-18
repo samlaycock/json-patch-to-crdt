@@ -19,6 +19,7 @@ import type {
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot } from "./dot";
+import { stringifyJsonPointer } from "./patch";
 
 class SharedElementMetadataMismatchError extends Error {
   readonly path: string;
@@ -72,7 +73,7 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
   try {
     const requireSharedOrigin = options.requireSharedOrigin ?? true;
     const mismatchPath = requireSharedOrigin ? findSeqLineageMismatch(a.root, b.root, []) : null;
-    if (mismatchPath) {
+    if (mismatchPath !== null) {
       return {
         ok: false,
         error: {
@@ -169,7 +170,7 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
         }
 
         if (!shared) {
-          return `/${frame.path.join("/")}`;
+          return stringifyJsonPointer(frame.path);
         }
       }
     }
@@ -364,11 +365,11 @@ function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number, path: string[]): RgaSeq {
 
     if (ea && eb) {
       if (ea.prev !== eb.prev) {
-        throw new SharedElementMetadataMismatchError(toPointer(path), id, "prev");
+        throw new SharedElementMetadataMismatchError(stringifyJsonPointer(path), id, "prev");
       }
 
       if (!sameDot(ea.insDot, eb.insDot)) {
-        throw new SharedElementMetadataMismatchError(toPointer(path), id, "insDot");
+        throw new SharedElementMetadataMismatchError(stringifyJsonPointer(path), id, "insDot");
       }
 
       // Both sides have this element. Merge:
@@ -396,14 +397,6 @@ function mergeSeq(a: RgaSeq, b: RgaSeq, depth: number, path: string[]): RgaSeq {
 
 function sameDot(a: Dot, b: Dot): boolean {
   return a.actor === b.actor && a.ctr === b.ctr;
-}
-
-function toPointer(path: string[]): string {
-  if (path.length === 0) {
-    return "/";
-  }
-
-  return `/${path.join("/")}`;
 }
 
 function cloneElem(e: RgaElem, depth: number): RgaElem {
