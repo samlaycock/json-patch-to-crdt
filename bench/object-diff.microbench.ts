@@ -90,8 +90,70 @@ function buildNextWideObject(
   return next;
 }
 
+function buildNestedValue(index: number): JsonValue {
+  return {
+    meta: {
+      id: index,
+      label: `item-${index}`,
+      tags: [`tag-${index % 7}`, `group-${index % 5}`],
+    },
+    payload: {
+      active: index % 2 === 0,
+      score: index * 10,
+      trail: [index, index + 1, index + 2],
+    },
+  };
+}
+
+function buildWideNestedObject(width: number): Record<string, JsonValue> {
+  const out: Record<string, JsonValue> = {};
+
+  for (let i = 0; i < width; i++) {
+    out[formatKey(i)] = buildNestedValue(i);
+  }
+
+  return out;
+}
+
+function buildNextWideNestedRewriteObject(
+  base: Record<string, JsonValue>,
+  width: number,
+): Record<string, JsonValue> {
+  const renameIndexes = uniqueIndexes(width, [1, Math.floor(width / 5), Math.floor(width / 2)]);
+  const duplicateIndexes = uniqueIndexes(width, [
+    2,
+    Math.floor(width / 4),
+    Math.floor((width * 4) / 5),
+  ]).filter((index) => !renameIndexes.includes(index));
+  const next: Record<string, JsonValue> = {};
+
+  for (let i = 0; i < width; i++) {
+    const sourceKey = formatKey(i);
+    const targetKey = renameIndexes.includes(i) ? formatRenamedKey(i) : sourceKey;
+    next[targetKey] = base[sourceKey]!;
+  }
+
+  for (const index of duplicateIndexes) {
+    next[formatDuplicateKey(index)] = base[formatKey(index)]!;
+  }
+
+  return next;
+}
+
 function formatKey(index: number): string {
   return `k${String(index).padStart(5, "0")}`;
+}
+
+function formatRenamedKey(index: number): string {
+  return `renamed-${String(index).padStart(5, "0")}`;
+}
+
+function formatDuplicateKey(index: number): string {
+  return `duplicate-${String(index).padStart(5, "0")}`;
+}
+
+function uniqueIndexes(width: number, indexes: readonly number[]): number[] {
+  return [...new Set(indexes.filter((index) => index >= 0 && index < width))].sort((a, b) => a - b);
 }
 
 function legacyDiffJsonPatch(base: JsonValue, next: JsonValue): JsonPatchOp[] {
@@ -322,7 +384,43 @@ function runScenario(width: number, runs: number): void {
   console.log(`avg heap delta reduction: ${format(heapDeltaReduction)} MB`);
 }
 
+function runNestedRewriteScenario(width: number, runs: number): void {
+  const base = buildWideNestedObject(width);
+  const next = buildNextWideNestedRewriteObject(base, width);
+  const rewriteOptions = { emitMoves: true, emitCopies: true } as const;
+
+  const baselineOps = diffJsonPatch(base, next);
+  const rewriteOps = diffJsonPatch(base, next, rewriteOptions);
+
+  if (!rewriteOps.every((op) => op.op === "move" || op.op === "copy")) {
+    throw new Error("nested rewrite benchmark expected move/copy-only output");
+  }
+
+  const baselineStats = measure("nested-object-diff", runs, () => {
+    diffJsonPatch(base, next);
+  });
+  const rewriteStats = measure("nested-object-diff+rewrites", runs, () => {
+    diffJsonPatch(base, next, rewriteOptions);
+  });
+  const overhead = rewriteStats.avgMs / baselineStats.avgMs;
+
+  console.log("");
+  console.log("Object diff microbenchmark (nested rename/duplicate rewrites)");
+  console.log(`width=${width} runs=${runs}`);
+  console.log(`baseline op count=${baselineOps.length} rewrite op count=${rewriteOps.length}`);
+  console.log(
+    [
+      "name                       avg(ms)  p50(ms)  min(ms)  max(ms)  avgHeapDelta(MB)",
+      `${baselineStats.name.padEnd(26)} ${format(baselineStats.avgMs).padStart(7)} ${format(baselineStats.p50Ms).padStart(8)} ${format(baselineStats.minMs).padStart(8)} ${format(baselineStats.maxMs).padStart(8)} ${format(baselineStats.avgHeapDeltaMb).padStart(16)}`,
+      `${rewriteStats.name.padEnd(26)} ${format(rewriteStats.avgMs).padStart(7)} ${format(rewriteStats.p50Ms).padStart(8)} ${format(rewriteStats.minMs).padStart(8)} ${format(rewriteStats.maxMs).padStart(8)} ${format(rewriteStats.avgHeapDeltaMb).padStart(16)}`,
+    ].join("\n"),
+  );
+  console.log(`rewrite overhead(avg): ${format(overhead)}x`);
+}
+
 const width = parsePositiveIntEnv("BENCH_OBJECT_DIFF_WIDTH", 50_000);
 const runs = parsePositiveIntEnv("BENCH_OBJECT_DIFF_RUNS", 6);
+const rewriteWidth = parsePositiveIntEnv("BENCH_OBJECT_REWRITE_WIDTH", 5_000);
 
 runScenario(width, runs);
+runNestedRewriteScenario(rewriteWidth, runs);

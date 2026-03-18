@@ -18,8 +18,38 @@ import {
   docFromJson,
 } from "../src/internals";
 import { setMaterializeObserverForTests } from "../src/materialize";
+import { stableJsonValueKey } from "../src/patch";
 
 describe("performance regressions", () => {
+  it("memoizes structural fingerprints for repeated nested nodes", () => {
+    const hits = { count: 0 };
+    const leaf = {};
+    Object.defineProperty(leaf, "label", {
+      enumerable: true,
+      get: () => {
+        hits.count += 1;
+        return "deep";
+      },
+    });
+    const value = {};
+    Object.defineProperty(value, "child", {
+      enumerable: true,
+      get: () => {
+        hits.count += 1;
+        return leaf;
+      },
+    });
+
+    const cache = new WeakMap<object, string>();
+    const firstKey = stableJsonValueKey(value as JsonValue, cache);
+    const hitsAfterFirstPass = hits.count;
+    const secondKey = stableJsonValueKey(value as JsonValue, cache);
+
+    expect(firstKey).toBe(secondKey);
+    expect(hitsAfterFirstPass).toBeGreaterThan(0);
+    expect(hits.count).toBe(hitsAfterFirstPass);
+  });
+
   it("diffs large arrays with a narrow changed window without full-array replace", () => {
     const baseArr = Array.from({ length: 1_500 }, (_, idx) => idx);
     const nextArr = [...baseArr];

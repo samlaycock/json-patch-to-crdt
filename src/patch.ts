@@ -63,11 +63,13 @@ interface StableJsonValueFrame {
 
 interface StableJsonArrayFrame {
   readonly kind: "array";
+  readonly value: readonly JsonValue[];
   readonly startIndex: number;
 }
 
 interface StableJsonObjectFrame {
   readonly kind: "object";
+  readonly value: Record<string, JsonValue>;
   readonly keys: readonly string[];
   readonly startIndex: number;
 }
@@ -491,22 +493,17 @@ function emitObjectStructuralOps(
     return;
   }
 
+  const structuralKeyCache = new WeakMap<object, string>();
   const matchedMoveSources = new Set<string>();
   const moveTargets = new Map<string, string>();
   if (options.emitMoves) {
     const moveSourceBuckets = new Map<string, string[]>();
     for (const baseKey of baseOnlyKeys) {
-      const bucketKey = stableJsonValueKey(base[baseKey]!);
-      const bucket = moveSourceBuckets.get(bucketKey);
-      if (bucket) {
-        bucket.push(baseKey);
-      } else {
-        moveSourceBuckets.set(bucketKey, [baseKey]);
-      }
+      insertObjectSourceBucket(moveSourceBuckets, baseKey, base[baseKey]!, structuralKeyCache);
     }
 
     for (const nextKey of nextOnlyKeys) {
-      const bucket = moveSourceBuckets.get(stableJsonValueKey(next[nextKey]!));
+      const bucket = moveSourceBuckets.get(stableJsonValueKey(next[nextKey]!, structuralKeyCache));
       if (!bucket) {
         continue;
       }
@@ -519,15 +516,13 @@ function emitObjectStructuralOps(
     }
   }
 
-  const availableSources = new Map<string, JsonValue>();
-  const availableSourceKeys: string[] = [];
+  const copySourceBuckets = new Map<string, string[]>();
   for (const key of sharedKeys) {
     if (!jsonEquals(base[key]!, next[key]!)) {
       continue;
     }
 
-    availableSources.set(key, base[key]!);
-    availableSourceKeys.push(key);
+    insertObjectSourceBucket(copySourceBuckets, key, base[key]!, structuralKeyCache);
   }
 
   for (const nextKey of nextOnlyKeys) {
@@ -541,24 +536,22 @@ function emitObjectStructuralOps(
       const fromPath = stringifyJsonPointer(path);
       path.pop();
       ops.push({ op: "move", from: fromPath, path: targetPath });
-      availableSources.set(nextKey, next[nextKey]!);
-      insertSortedKey(availableSourceKeys, nextKey);
+      insertObjectSourceBucket(copySourceBuckets, nextKey, next[nextKey]!, structuralKeyCache);
       continue;
     }
 
     if (options.emitCopies) {
       const copySource = findObjectCopySource(
-        availableSourceKeys,
-        availableSources,
+        copySourceBuckets,
         next[nextKey]!,
+        structuralKeyCache,
       );
       if (copySource !== undefined) {
         path.push(copySource);
         const fromPath = stringifyJsonPointer(path);
         path.pop();
         ops.push({ op: "copy", from: fromPath, path: targetPath });
-        availableSources.set(nextKey, next[nextKey]!);
-        insertSortedKey(availableSourceKeys, nextKey);
+        insertObjectSourceBucket(copySourceBuckets, nextKey, next[nextKey]!, structuralKeyCache);
         continue;
       }
     }
@@ -568,8 +561,7 @@ function emitObjectStructuralOps(
       path: targetPath,
       value: next[nextKey]!,
     });
-    availableSources.set(nextKey, next[nextKey]!);
-    insertSortedKey(availableSourceKeys, nextKey);
+    insertObjectSourceBucket(copySourceBuckets, nextKey, next[nextKey]!, structuralKeyCache);
   }
 
   for (const baseKey of baseOnlyKeys) {
@@ -583,18 +575,28 @@ function emitObjectStructuralOps(
   }
 }
 
-function findObjectCopySource(
-  sortedKeys: readonly string[],
-  availableSources: ReadonlyMap<string, JsonValue>,
-  target: JsonValue,
-): string | undefined {
-  for (const key of sortedKeys) {
-    if (jsonEquals(availableSources.get(key)!, target)) {
-      return key;
-    }
+function insertObjectSourceBucket(
+  buckets: Map<string, string[]>,
+  key: string,
+  value: JsonValue,
+  structuralKeyCache: WeakMap<object, string>,
+): void {
+  const bucketKey = stableJsonValueKey(value, structuralKeyCache);
+  const bucket = buckets.get(bucketKey);
+  if (bucket) {
+    insertSortedKey(bucket, key);
+    return;
   }
 
-  return undefined;
+  buckets.set(bucketKey, [key]);
+}
+
+function findObjectCopySource(
+  copySourceBuckets: ReadonlyMap<string, readonly string[]>,
+  target: JsonValue,
+  structuralKeyCache: WeakMap<object, string>,
+): string | undefined {
+  return copySourceBuckets.get(stableJsonValueKey(target, structuralKeyCache))?.[0];
 }
 
 function insertSortedKey(keys: string[], key: string): void {
@@ -1171,7 +1173,17 @@ function finalizeArrayOps(
   return out;
 }
 
-function stableJsonValueKey(value: JsonValue): string {
+export function stableJsonValueKey(
+  value: JsonValue,
+  structuralKeyCache?: WeakMap<object, string>,
+): string {
+  if (value !== null && typeof value === "object") {
+    const cachedValue = structuralKeyCache?.get(value);
+    if (cachedValue !== undefined) {
+      return cachedValue;
+    }
+  }
+
   const stack: StableJsonKeyFrame[] = [{ kind: "value", value, depth: 0 }];
   const results: string[] = [];
 
@@ -1180,17 +1192,19 @@ function stableJsonValueKey(value: JsonValue): string {
 
     if (frame.kind === "array") {
       const childParts = results.splice(frame.startIndex);
-      results.push(`[${childParts.join(",")}]`);
+      const stableKey = `[${childParts.join(",")}]`;
+      structuralKeyCache?.set(frame.value, stableKey);
+      results.push(stableKey);
       continue;
     }
 
     if (frame.kind === "object") {
       const childParts = results.splice(frame.startIndex);
-      results.push(
-        `{${frame.keys
-          .map((key, index) => `${JSON.stringify(key)}:${childParts[index]!}`)
-          .join(",")}}`,
-      );
+      const stableKey = `{${frame.keys
+        .map((key, index) => `${JSON.stringify(key)}:${childParts[index]!}`)
+        .join(",")}}`;
+      structuralKeyCache?.set(frame.value, stableKey);
+      results.push(stableKey);
       continue;
     }
 
@@ -1201,9 +1215,15 @@ function stableJsonValueKey(value: JsonValue): string {
       continue;
     }
 
+    const cachedValue = structuralKeyCache?.get(frame.value);
+    if (cachedValue !== undefined) {
+      results.push(cachedValue);
+      continue;
+    }
+
     if (Array.isArray(frame.value)) {
       const startIndex = results.length;
-      stack.push({ kind: "array", startIndex });
+      stack.push({ kind: "array", value: frame.value, startIndex });
       for (let index = frame.value.length - 1; index >= 0; index--) {
         stack.push({
           kind: "value",
@@ -1216,7 +1236,7 @@ function stableJsonValueKey(value: JsonValue): string {
 
     const keys = Object.keys(frame.value).sort();
     const startIndex = results.length;
-    stack.push({ kind: "object", keys, startIndex });
+    stack.push({ kind: "object", value: frame.value, keys, startIndex });
     for (let index = keys.length - 1; index >= 0; index--) {
       const key = keys[index]!;
       stack.push({
