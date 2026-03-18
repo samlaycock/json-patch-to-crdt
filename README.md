@@ -188,7 +188,8 @@ if (versionVectorCovers(mergedCheckpoint, stableCheckpoint)) {
 Use `mergeVersionVectors(...)` for sync-style "what has this cluster observed?"
 bookkeeping. Use `intersectVersionVectors(...)` for tombstone compaction
 checkpoints, because compaction is only safe once every live peer covers the
-same delete dots.
+same delete dots. If you call `intersectVersionVectors(...)` with a single
+vector, it returns that vector unchanged.
 
 ## Runtime JSON Validation
 

@@ -92,7 +92,12 @@ export function serializeState(state: CrdtState): SerializedState {
   };
 }
 
-/** Reconstruct a full CRDT state from its serialized form, restoring the clock. */
+/**
+ * Reconstruct a full CRDT state from its serialized form, restoring the clock.
+ *
+ * May throw `TraversalDepthError` when the payload exceeds the maximum
+ * supported nesting depth.
+ */
 export function deserializeState(data: SerializedState): CrdtState {
   const raw = readSerializedStateEnvelope(data);
 

@@ -167,6 +167,16 @@ describe("dots and version vectors", () => {
     expect(observedVersionVector(removed)).toEqual({ A: removed.clock.ctr });
   });
 
+  it("seeds observed state vectors from the local clock when it is ahead of the doc", () => {
+    const state = createState({ value: 1 }, { actor: "A" });
+    const ahead: CrdtState = {
+      doc: state.doc,
+      clock: createClock("A", state.clock.ctr + 3),
+    };
+
+    expect(observedVersionVector(ahead)).toEqual({ A: ahead.clock.ctr });
+  });
+
   it("observes sequence tombstone delete dots", () => {
     const state = createState(["a"], { actor: "A" });
     const removed = applyPatch(state, [{ op: "remove", path: "/0" }], {
