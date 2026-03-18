@@ -111,14 +111,41 @@ export type SerializedNode =
     }
   | { kind: "seq"; elems: Record<string, SerializedRgaElem> };
 
+/** Versioned JSON-serializable form of a CRDT document. */
+export interface SerializedDocV1 {
+  version: 1;
+  root: SerializedNode;
+}
+
+/** Legacy unversioned JSON-serializable form of a CRDT document. */
+export interface LegacySerializedDoc {
+  root: SerializedNode;
+}
+
 /** JSON-serializable form of a CRDT document. */
-export type SerializedDoc = { root: SerializedNode };
+export type SerializedDoc = SerializedDocV1 | LegacySerializedDoc;
 
 /** JSON-serializable form of a clock. */
-export type SerializedClock = { actor: ActorId; ctr: number };
+export interface SerializedClock {
+  actor: ActorId;
+  ctr: number;
+}
+
+/** Versioned JSON-serializable form of a full CRDT state (document + clock). */
+export interface SerializedStateV1 {
+  version: 1;
+  doc: SerializedDoc;
+  clock: SerializedClock;
+}
+
+/** Legacy unversioned JSON-serializable form of a full CRDT state (document + clock). */
+export interface LegacySerializedState {
+  doc: SerializedDoc;
+  clock: SerializedClock;
+}
 
 /** JSON-serializable form of a full CRDT state (document + clock). */
-export type SerializedState = { doc: SerializedDoc; clock: SerializedClock };
+export type SerializedState = SerializedStateV1 | LegacySerializedState;
 
 /** Typed reasons for rejecting malformed serialized CRDT payloads. */
 export type DeserializeErrorReason = "INVALID_SERIALIZED_SHAPE" | "INVALID_SERIALIZED_INVARIANT";
