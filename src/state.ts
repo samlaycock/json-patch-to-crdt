@@ -663,34 +663,39 @@ function compilePreparedSingleIntentFromDoc(
 
   const parentNode = resolvedParent.node;
   if (parentNode.kind === "seq") {
-    const parsedIndex = parseArrayIndexTokenForDoc(
-      key,
+    const parsedIndex = parseArrayIndexTokenForDoc(key, op.op, op.path, opIndex);
+    if (!parsedIndex.ok) {
+      return parsedIndex;
+    }
+
+    const boundedIndex = validateArrayIndexBounds(
+      parsedIndex.index,
       op.op,
       rgaLength(parentNode),
       op.path,
       opIndex,
     );
-    if (!parsedIndex.ok) {
-      return parsedIndex;
+    if (!boundedIndex.ok) {
+      return boundedIndex;
     }
 
     if (op.op === "add") {
       return {
         ok: true,
-        intents: [{ t: "ArrInsert", path: parentPath, index: parsedIndex.index, value: op.value }],
+        intents: [{ t: "ArrInsert", path: parentPath, index: boundedIndex.index, value: op.value }],
       };
     }
 
     if (op.op === "remove") {
       return {
         ok: true,
-        intents: [{ t: "ArrDelete", path: parentPath, index: parsedIndex.index }],
+        intents: [{ t: "ArrDelete", path: parentPath, index: boundedIndex.index }],
       };
     }
 
     return {
       ok: true,
-      intents: [{ t: "ArrReplace", path: parentPath, index: parsedIndex.index, value: op.value }],
+      intents: [{ t: "ArrReplace", path: parentPath, index: boundedIndex.index, value: op.value }],
     };
   }
 
@@ -843,7 +848,6 @@ function resolveNodeAtPath(
 function parseArrayIndexTokenForDoc(
   token: string,
   op: "add" | "remove" | "replace",
-  arrLength: number,
   path: string,
   opIndex: number,
 ): { ok: true; index: number } | ApplyError {
@@ -885,7 +889,21 @@ function parseArrayIndexTokenForDoc(
     };
   }
 
+  return { ok: true, index };
+}
+
+function validateArrayIndexBounds(
+  index: number,
+  op: "add" | "remove" | "replace",
+  arrLength: number,
+  path: string,
+  opIndex: number,
+): { ok: true; index: number } | ApplyError {
   if (op === "add") {
+    if (index === Number.POSITIVE_INFINITY) {
+      return { ok: true, index };
+    }
+
     if (index > arrLength) {
       return {
         ok: false,
