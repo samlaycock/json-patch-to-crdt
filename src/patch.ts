@@ -95,6 +95,11 @@ interface ArrayRewriteState {
   readonly structuralKeyCache: WeakMap<object, string>;
 }
 
+// Array rewrite comparisons should always use entry.key rather than
+// recomputing from entry.value. Add/copy/replace paths store a cloned value on
+// the entry, so the clone does not share WeakMap identity with the source used
+// to prime structuralKeyCache.
+
 /** Structured compile error used to map patch validation failures to typed reasons. */
 export class PatchCompileError extends Error {
   readonly reason: PatchErrorReason;
