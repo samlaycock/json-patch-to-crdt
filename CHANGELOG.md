@@ -1,5 +1,39 @@
 # json-patch-to-crdt
 
+## 0.4.0
+
+### Minor Changes
+
+- 39a0e1e: Expose public version-vector inspection helpers for sync and compaction flows.
+
+  Add `observedVersionVector`, `mergeVersionVectors`, `intersectVersionVectors`,
+  and `versionVectorCovers` to the main API surface, and document how to use them
+  to derive sync checkpoints and causally-stable tombstone compaction checkpoints.
+
+- 2c5ccb6: Version serialized CRDT document and state envelopes for persistence. `serializeDoc(...)` and
+  `serializeState(...)` now emit `version: 1`, while `deserializeDoc(...)` and
+  `deserializeState(...)` continue to accept legacy unversioned payloads and reject unknown future
+  envelope versions until migrations are added.
+- becf934: Add an opt-in `lcsLinearMaxCells` diff option so `arrayStrategy: "lcs-linear"` can fall back to an
+  atomic array `replace` when the trimmed unmatched window would otherwise trigger worst-case
+  `O(n * m)` work.
+
+### Patch Changes
+
+- 8db98ef: Make `diffJsonPatch` traverse deep object comparisons and move/copy source matching iteratively so deeply nested changes return patch ops or a typed `MAX_DEPTH_EXCEEDED` error instead of overflowing the JavaScript call stack.
+- bcd4c37: Include RGA sequence delete dots when recovering actor counters during state deserialization, `applyPatchAsActor`, and `mergeState` so resumed writes do not reuse prior actor counters after array deletions.
+- e466874: Speed up duplicate-heavy array move/copy rewrite passes by indexing shadow-array rewrite candidates with stable structural keys instead of repeatedly rescanning the evolving array during finalize-time copy and move detection. Add regression coverage for the duplicate-heavy copy path and extend the array diff microbenchmark with duplicate-heavy append, insert, and reorder scenarios using `emitCopies` and `emitMoves`.
+- 8f07b19: Deduplicate benchmark environment parsing by introducing a shared `parsePositiveIntEnv` helper used across the object diff, CRDT diff, and sequential apply microbenchmarks.
+- 2ab7db4: Compile explicit-base sequential patch steps directly from the live CRDT docs so narrow patches no longer eagerly materialize full head/base documents before the first operation, while preserving sequential move/copy/test behavior.
+- c7118fa: Escape merge lineage error pointers with RFC 6901 encoding so `tryMergeDoc`, `mergeDoc`, and related shared-element merge diagnostics report unambiguous paths for keys containing `/` or `~`.
+- 1fcd23e: Reject non-plain objects during strict runtime JSON validation and normalize them consistently to `null` or omitted object properties. Add regression coverage for `Date`, `Map`, `Set`, `RegExp`, typed arrays, and class instances, and document the runtime normalization behavior.
+- 7928d07: Reduce object move/copy rewrite overhead in `diffJsonPatch` by memoizing
+  stable structural fingerprints and bucketing deterministic copy sources.
+
+  Add regression coverage for memoized structural keys and wide nested
+  object rename/duplicate rewrites, plus a dedicated nested rewrite
+  microbenchmark in `bench:object-diff`.
+
 ## 0.3.0
 
 ### Minor Changes
