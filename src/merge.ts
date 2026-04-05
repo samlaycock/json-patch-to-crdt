@@ -212,28 +212,50 @@ function maxObservedCtrForActor(doc: Doc, actor: ActorId, a: CrdtState, b: CrdtS
 }
 
 function repDot(node: Node): Dot {
-  switch (node.kind) {
-    case "lww":
-      return node.dot;
-    case "obj": {
-      // Use the max dot across all entries and tombstones.
-      let best: Dot = { actor: "", ctr: 0 };
-      for (const entry of node.entries.values()) {
-        if (compareDot(entry.dot, best) > 0) best = entry.dot;
-      }
-      for (const d of node.tombstone.values()) {
-        if (compareDot(d, best) > 0) best = d;
-      }
-      return best;
-    }
-    case "seq": {
-      let best: Dot = { actor: "", ctr: 0 };
-      for (const e of node.elems.values()) {
-        if (compareDot(e.insDot, best) > 0) best = e.insDot;
-      }
-      return best;
+  let best: Dot = { actor: "", ctr: 0 };
+  const stack: Array<{ node: Node; depth: number }> = [{ node, depth: 0 }];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    assertTraversalDepth(frame.depth);
+
+    switch (frame.node.kind) {
+      case "lww":
+        if (compareDot(frame.node.dot, best) > 0) {
+          best = frame.node.dot;
+        }
+        break;
+      case "obj":
+        for (const entry of frame.node.entries.values()) {
+          if (compareDot(entry.dot, best) > 0) {
+            best = entry.dot;
+          }
+
+          stack.push({ node: entry.node, depth: frame.depth + 1 });
+        }
+        for (const tombstone of frame.node.tombstone.values()) {
+          if (compareDot(tombstone, best) > 0) {
+            best = tombstone;
+          }
+        }
+        break;
+      case "seq":
+        for (const elem of frame.node.elems.values()) {
+          if (compareDot(elem.insDot, best) > 0) {
+            best = elem.insDot;
+          }
+
+          if (elem.delDot && compareDot(elem.delDot, best) > 0) {
+            best = elem.delDot;
+          }
+
+          stack.push({ node: elem.value, depth: frame.depth + 1 });
+        }
+        break;
     }
   }
+
+  return best;
 }
 
 function mergeNode(a: Node, b: Node): Node {
