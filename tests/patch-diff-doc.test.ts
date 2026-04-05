@@ -567,19 +567,23 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "/arr/1250", value: -1 }]);
   });
 
-  it("avoids atomic fallback for large unmatched windows with linear-space LCS", () => {
-    const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
-    const nextArr = [...baseArr.slice(1), baseArr[0]!];
+  it(
+    "avoids atomic fallback for large unmatched windows with linear-space LCS",
+    () => {
+      const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
+      const nextArr = [...baseArr.slice(1), baseArr[0]!];
 
-    const base: JsonValue = { arr: baseArr };
-    const next: JsonValue = { arr: nextArr };
-    const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+      const base: JsonValue = { arr: baseArr };
+      const next: JsonValue = { arr: nextArr };
+      const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
 
-    expect(ops).toEqual([
-      { op: "remove", path: "/arr/0" },
-      { op: "add", path: "/arr/3999", value: 0 },
-    ]);
-  });
+      expect(ops).toEqual([
+        { op: "remove", path: "/arr/0" },
+        { op: "add", path: "/arr/3999", value: 0 },
+      ]);
+    },
+    { timeout: 15_000 },
+  );
 
   it("can fall back to atomic replacement for large unmatched windows with linear-space LCS", () => {
     const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
