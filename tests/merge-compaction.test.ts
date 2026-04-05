@@ -259,6 +259,33 @@ describe("mergeDoc", () => {
     expect(materialize(merged.root)).toBe(42);
   });
 
+  it("preserves deeper subtree edits when resolving kind mismatch", () => {
+    const origin = createState(
+      {
+        k: {
+          a: {
+            b: 1,
+          },
+        },
+      },
+      { actor: "origin" },
+    );
+    const deepEdit = forkState(origin, "Z");
+    const kindReplace = forkState(origin, "A");
+
+    const nextDeepEdit = applyPatch(deepEdit, [{ op: "replace", path: "/k/a/b", value: 2 }]);
+    const nextKindReplace = applyPatch(kindReplace, [{ op: "replace", path: "/k", value: 0 }]);
+
+    const merged = mergeDoc(nextDeepEdit.doc, nextKindReplace.doc);
+    expect(materialize(merged.root)).toEqual({
+      k: {
+        a: {
+          b: 2,
+        },
+      },
+    });
+  });
+
   it("merges empty objects", () => {
     const a = docFromJson({}, newDotGen("A"));
     const b = docFromJson({}, newDotGen("B"));
