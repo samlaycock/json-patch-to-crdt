@@ -637,6 +637,20 @@ describe("clock and state", () => {
     expect(toJson(next)).toEqual({ list: [42, 2, 3] });
   });
 
+  it("supports nested object updates through array elements", () => {
+    const state = createState({ list: [{ x: 1 }] }, { actor: "A" });
+    const next = applyPatch(state, [{ op: "replace", path: "/list/0/x", value: 2 }]);
+
+    expect(toJson(next)).toEqual({ list: [{ x: 2 }] });
+  });
+
+  it("supports nested array updates through array elements", () => {
+    const state = createState({ list: [[1]] }, { actor: "A" });
+    const next = applyPatch(state, [{ op: "replace", path: "/list/0/0", value: 2 }]);
+
+    expect(toJson(next)).toEqual({ list: [[2]] });
+  });
+
   it("keeps sequential testAgainst base aligned with the evolving head when no explicit base", () => {
     const state = createState({ list: [1] }, { actor: "A" });
     const next = applyPatch(
