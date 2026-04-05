@@ -60,62 +60,21 @@ export function docFromJsonWithDot(value: JsonValue, dot: Dot): Doc {
 }
 
 function getSeqAtPath(doc: Doc, path: string[]): RgaSeq | undefined {
-  let cur: Node = doc.root;
-
-  for (const seg of path) {
-    if (cur.kind !== "obj") {
-      return undefined;
-    }
-
-    const ent = (cur as ObjNode).entries.get(seg);
-
-    if (!ent) {
-      return undefined;
-    }
-
-    cur = ent.node;
-  }
-
-  return cur.kind === "seq" ? (cur as RgaSeq) : undefined;
+  const node = getNodeAtPath(doc, path);
+  return node?.kind === "seq" ? node : undefined;
 }
 
 function getObjAtPathStrict(
   doc: Doc,
   path: string[],
 ): { ok: true; obj: ObjNode } | { ok: false; message: string } {
-  let cur: Node = doc.root;
-  const seen: string[] = [];
-
-  if (path.length === 0) {
-    if (cur.kind !== "obj") {
-      return { ok: false, message: "expected object at /" };
-    }
-
-    return { ok: true, obj: cur as ObjNode };
+  const node = getNodeAtPath(doc, path);
+  if (!node || node.kind !== "obj") {
+    const pointer = stringifyJsonPointer(path);
+    return { ok: false, message: `expected object at ${pointer === "" ? "/" : pointer}` };
   }
 
-  for (const seg of path) {
-    if (cur.kind !== "obj") {
-      return {
-        ok: false,
-        message: `expected object at /${seen.join("/")}`,
-      };
-    }
-
-    const entry = (cur as ObjNode).entries.get(seg);
-    seen.push(seg);
-
-    if (!entry || entry.node.kind !== "obj") {
-      return {
-        ok: false,
-        message: `expected object at /${seen.join("/")}`,
-      };
-    }
-
-    cur = entry.node;
-  }
-
-  return { ok: true, obj: cur as ObjNode };
+  return { ok: true, obj: node };
 }
 
 function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
@@ -183,16 +142,43 @@ function getNodeAtPath(doc: Doc, path: string[]): Node | undefined {
   let cur: Node = doc.root;
 
   for (const seg of path) {
-    if (cur.kind !== "obj") {
-      return undefined;
+    if (cur.kind === "obj") {
+      const ent = cur.entries.get(seg);
+      if (!ent) {
+        return undefined;
+      }
+
+      cur = ent.node;
+      continue;
     }
 
-    const ent = (cur as ObjNode).entries.get(seg);
-    if (!ent) {
-      return undefined;
+    if (cur.kind === "seq") {
+      if (!ARRAY_INDEX_TOKEN_PATTERN.test(seg)) {
+        return undefined;
+      }
+
+      const index = Number(seg);
+      if (!Number.isSafeInteger(index)) {
+        return undefined;
+      }
+
+      const elemId = rgaIdAtIndex(cur, index);
+      if (elemId === undefined) {
+        return undefined;
+      }
+
+      const elem = cur.elems.get(elemId);
+      if (!elem) {
+        return undefined;
+      }
+
+      cur = elem.value;
+      continue;
     }
 
-    cur = ent.node;
+    if (cur.kind === "lww") {
+      return undefined;
+    }
   }
 
   return cur;
