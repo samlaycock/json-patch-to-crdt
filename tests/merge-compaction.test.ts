@@ -277,13 +277,17 @@ describe("mergeDoc", () => {
     const nextKindReplace = applyPatch(kindReplace, [{ op: "replace", path: "/k", value: 0 }]);
 
     const merged = mergeDoc(nextDeepEdit.doc, nextKindReplace.doc);
-    expect(materialize(merged.root)).toEqual({
+    const mergedReversed = mergeDoc(nextKindReplace.doc, nextDeepEdit.doc);
+    const expected = {
       k: {
         a: {
           b: 2,
         },
       },
-    });
+    };
+
+    expect(materialize(merged.root)).toEqual(expected);
+    expect(materialize(mergedReversed.root)).toEqual(expected);
   });
 
   it("merges empty objects", () => {
