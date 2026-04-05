@@ -869,6 +869,28 @@ describe("clock and state", () => {
     }
   });
 
+  it("preserves INVALID_POINTER lookup failures for test operations", () => {
+    const state = createState({ list: [1] }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "test", path: "/list/x", value: 1 }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_POINTER");
+      expect(result.error.path).toBe("/list/x");
+    }
+  });
+
+  it("preserves INVALID_TARGET lookup failures for test operations", () => {
+    const state = createState({ num: 1 }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "test", path: "/num/x", value: 1 }]);
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_TARGET");
+      expect(result.error.path).toBe("/num/x");
+    }
+  });
+
   it("throws PatchError with typed metadata when move source is missing", () => {
     const state = createState({ a: 1 }, { actor: "A" });
 

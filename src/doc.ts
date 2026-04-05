@@ -452,17 +452,43 @@ function isJsonPrimitive(value: JsonValue): value is null | string | number | bo
   );
 }
 
-function getJsonAtDocPathForTest(doc: Doc, path: string[]): JsonValue {
+function getJsonAtDocPathForTest(
+  doc: Doc,
+  path: string[],
+): { ok: true; value: JsonValue } | { ok: false; error: ApplyError } {
   let cur: Node = doc.root;
 
   for (let i = 0; i < path.length; i++) {
     const seg = path[i]!;
-    assertTraversalDepth(i + 1);
+    try {
+      assertTraversalDepth(i + 1);
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof TraversalDepthError
+            ? toDepthApplyError(error)
+            : {
+                ok: false,
+                code: 409,
+                reason: "INVALID_PATCH",
+                message: error instanceof Error ? error.message : "invalid test path",
+              },
+      };
+    }
 
     if (cur.kind === "obj") {
       const ent = cur.entries.get(seg);
       if (!ent) {
-        throw new Error(`Missing key '${seg}'`);
+        return {
+          ok: false,
+          error: {
+            ok: false,
+            code: 409,
+            reason: "MISSING_TARGET",
+            message: `Missing key '${seg}'`,
+          },
+        };
       }
 
       cur = ent.node;
@@ -471,23 +497,59 @@ function getJsonAtDocPathForTest(doc: Doc, path: string[]): JsonValue {
 
     if (cur.kind === "seq") {
       if (!ARRAY_INDEX_TOKEN_PATTERN.test(seg)) {
-        throw new Error(`Expected array index, got '${seg}'`);
+        return {
+          ok: false,
+          error: {
+            ok: false,
+            code: 409,
+            reason: "INVALID_POINTER",
+            message: `Expected array index, got '${seg}'`,
+          },
+        };
       }
 
       const idx = Number(seg);
+      if (!Number.isSafeInteger(idx)) {
+        return {
+          ok: false,
+          error: {
+            ok: false,
+            code: 409,
+            reason: "OUT_OF_BOUNDS",
+            message: `Index out of bounds at '${seg}'`,
+          },
+        };
+      }
+
       const id = rgaIdAtIndex(cur, idx);
       if (id === undefined) {
-        throw new Error(`Index out of bounds at '${seg}'`);
+        return {
+          ok: false,
+          error: {
+            ok: false,
+            code: 409,
+            reason: "OUT_OF_BOUNDS",
+            message: `Index out of bounds at '${seg}'`,
+          },
+        };
       }
 
       cur = cur.elems.get(id)!.value;
       continue;
     }
 
-    throw new Error(`Cannot traverse into non-container at '${seg}'`);
+    return {
+      ok: false,
+      error: {
+        ok: false,
+        code: 409,
+        reason: "INVALID_TARGET",
+        message: `Cannot traverse into non-container at '${seg}'`,
+      },
+    };
   }
 
-  return cur.kind === "lww" ? cur.value : materialize(cur);
+  return { ok: true, value: cur.kind === "lww" ? cur.value : materialize(cur) };
 }
 
 // ── Per-intent handlers ─────────────────────────────────────────────
@@ -498,22 +560,16 @@ function applyTest(
   it: Extract<IntentOp, { t: "Test" }>,
   evalTestAgainst: "head" | "base",
 ): ApplyResult | null {
-  let got: JsonValue;
-
-  try {
-    const targetDoc = evalTestAgainst === "head" ? head : base;
-    got = getJsonAtDocPathForTest(targetDoc, it.path);
-  } catch {
+  const targetDoc = evalTestAgainst === "head" ? head : base;
+  const got = getJsonAtDocPathForTest(targetDoc, it.path);
+  if (!got.ok) {
     return {
-      ok: false,
-      code: 409,
-      reason: "MISSING_TARGET",
-      message: `test path missing at /${it.path.join("/")}`,
       path: `/${it.path.join("/")}`,
+      ...got.error,
     };
   }
 
-  if (!jsonEquals(got, it.value)) {
+  if (!jsonEquals(got.value, it.value)) {
     return {
       ok: false,
       code: 409,
