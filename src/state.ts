@@ -302,7 +302,7 @@ function applyPatchInternal(
   state: CrdtState,
   patch: JsonPatchOp[],
   options: ApplyPatchOptions,
-  execution: "batch" | "step",
+  _execution: "batch" | "step",
 ): ApplyResult {
   const jsonValidation = options.jsonValidation ?? "none";
   const preparedPatch = preparePatchPayloadsSafe(patch, jsonValidation);
@@ -314,24 +314,6 @@ function applyPatchInternal(
   const semantics: PatchSemantics = options.semantics ?? "sequential";
 
   if (semantics === "sequential") {
-    if (!options.base && execution === "batch") {
-      const baseJson = materialize(state.doc.root);
-      const compiled = compilePreparedIntents(baseJson, runtimePatch, "sequential");
-      if (!compiled.ok) {
-        return compiled;
-      }
-
-      return applyIntentsToCrdt(
-        state.doc,
-        state.doc,
-        compiled.intents,
-        () => state.clock.next(),
-        options.testAgainst ?? "head",
-        (ctr) => bumpClockCounter(state, ctr),
-        { strictParents: options.strictParents },
-      );
-    }
-
     // When callers pass an explicit base, we keep a private shadow copy that advances
     // per operation so array index and pointer resolution remain consistent with RFC 6902.
     const explicitBaseState: CrdtState | null = options.base
@@ -525,7 +507,7 @@ function applySinglePatchOpSequentialStep(
     { strictParents: options.strictParents },
   );
   if (!headStep.ok) {
-    return headStep;
+    return withOpIndex(headStep, opIndex);
   }
 
   if (explicitBaseState && op.op !== "test") {
@@ -539,7 +521,7 @@ function applySinglePatchOpSequentialStep(
       { strictParents: options.strictParents },
     );
     if (!shadowStep.ok) {
-      return shadowStep;
+      return withOpIndex(shadowStep, opIndex);
     }
   }
 
@@ -573,7 +555,7 @@ function applySinglePatchOpExplicitShadowStep(
     { strictParents: options.strictParents },
   );
   if (!shadowStep.ok) {
-    return shadowStep;
+    return withOpIndex(shadowStep, opIndex);
   }
 
   return { ok: true };
@@ -1072,6 +1054,14 @@ function toApplyError(error: unknown): ApplyError {
     reason: "INVALID_PATCH",
     message: error instanceof Error ? error.message : "failed to compile patch",
   };
+}
+
+function withOpIndex(error: ApplyError, opIndex: number): ApplyError {
+  if (error.opIndex !== undefined) {
+    return error;
+  }
+
+  return { ...error, opIndex };
 }
 
 function toPointerParseApplyError(error: unknown, pointer: string, opIndex: number): ApplyError {
