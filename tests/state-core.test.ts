@@ -877,6 +877,7 @@ describe("clock and state", () => {
     if (!result.ok) {
       expect(result.error.reason).toBe("INVALID_POINTER");
       expect(result.error.path).toBe("/list/x");
+      expect(result.error.opIndex).toBe(0);
     }
   });
 
@@ -888,6 +889,7 @@ describe("clock and state", () => {
     if (!result.ok) {
       expect(result.error.reason).toBe("INVALID_TARGET");
       expect(result.error.path).toBe("/num/x");
+      expect(result.error.opIndex).toBe(0);
     }
   });
 

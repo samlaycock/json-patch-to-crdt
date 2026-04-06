@@ -564,8 +564,8 @@ function applyTest(
   const got = getJsonAtDocPathForTest(targetDoc, it.path);
   if (!got.ok) {
     return {
-      path: `/${it.path.join("/")}`,
       ...got.error,
+      path: `/${it.path.join("/")}`,
     };
   }
 
