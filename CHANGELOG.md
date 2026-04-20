@@ -1,5 +1,30 @@
 # json-patch-to-crdt
 
+## 0.4.1
+
+### Patch Changes
+
+- 09ea4ae: Fix mixed object/array path traversal during patch application so valid JSON Patch paths like
+  `/list/0/x` and `/list/0/0` work against CRDT-backed documents.
+
+  The apply layer now resolves parent paths through sequence elements instead of assuming every
+  intermediate segment is an object, and adds regression tests for nested object and nested array
+  replacements through array elements.
+
+- 63f391b: Fix kind-mismatch merge resolution so it considers the newest dot anywhere in the
+  competing subtrees instead of only shallow container metadata.
+
+  This preserves causally newer deep edits when they race with a concurrent
+  replacement of the parent path by a different node kind, and adds a regression
+  test covering the nested `/k/a/b` reproduction from Issue #122.
+
+- dda8fbc: Preserve typed lookup failures for `test` operations instead of collapsing
+  array-token and non-container traversal errors into `MISSING_TARGET`.
+
+  This keeps invalid array tokens mapped to `INVALID_POINTER`, non-container
+  traversal mapped to `INVALID_TARGET`, and adds regression coverage for the
+  Issue #123 reproductions.
+
 ## 0.4.0
 
 ### Minor Changes
