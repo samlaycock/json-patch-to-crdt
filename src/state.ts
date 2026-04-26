@@ -227,7 +227,7 @@ export function validateJsonPatch(
     actor: "__validate__",
     jsonValidation: options.jsonValidation,
   });
-  const result = tryApplyPatch(state, patch, options);
+  const result = tryApplyPatchInPlace(state, patch, { ...options, atomic: false });
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

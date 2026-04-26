@@ -950,6 +950,19 @@ describe("clock and state", () => {
     expect(base).toEqual({ list: ["a"] });
   });
 
+  it("validates patches without mutating nested patch payloads", () => {
+    const base: JsonValue = { list: [] };
+    const payload = { nested: ["a"] };
+    const patch: JsonPatchOp[] = [{ op: "add", path: "/list/0", value: payload }];
+
+    const result = validateJsonPatch(base, patch);
+
+    expect(result).toEqual({ ok: true });
+    expect(base).toEqual({ list: [] });
+    expect(payload).toEqual({ nested: ["a"] });
+    expect(patch).toEqual([{ op: "add", path: "/list/0", value: { nested: ["a"] } }]);
+  });
+
   it("validates strict jsonValidation patch payloads", () => {
     const result = validateJsonPatch(
       {},
