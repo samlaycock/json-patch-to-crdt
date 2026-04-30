@@ -16,6 +16,8 @@ import {
   cloneDoc,
   compileJsonPatchToIntent,
   docFromJson,
+  jsonPatchToCrdt,
+  materialize,
   stableJsonValueKey,
 } from "../src/internals";
 import { setMaterializeObserverForTests } from "../src/materialize";
@@ -371,6 +373,66 @@ describe("performance regressions", () => {
       nested: { label: "v2499", even: false },
     });
 
+    expect(untouchedMaterializeCalls).toBe(0);
+  });
+
+  it("avoids eager full-document materialization in jsonPatchToCrdt sequential mode", () => {
+    const huge = Array.from({ length: 2_500 }, (_, idx) => ({
+      idx,
+      nested: { label: `v${idx}`, even: idx % 2 === 0 },
+    }));
+    const baseJson: JsonValue = {
+      meta: { version: 0 },
+      untouched: {
+        huge,
+      },
+    };
+    let ctr = 0;
+    const nextDot = () => ({ actor: "perf", ctr: ++ctr });
+    const baseDoc = docFromJson(baseJson, nextDot);
+    const headDoc = cloneDoc(baseDoc);
+    let untouchedMaterializeCalls = 0;
+
+    expect(
+      jsonPatchToCrdt({
+        base: baseDoc,
+        head: headDoc,
+        patch: [{ op: "replace", path: "/meta/version", value: 1 }],
+        newDot: nextDot,
+        semantics: "sequential",
+      }),
+    ).toEqual({ ok: true });
+
+    setMaterializeObserverForTests((path, node) => {
+      if (
+        node.kind === "seq" &&
+        path.length === 2 &&
+        path[0] === "untouched" &&
+        path[1] === "huge"
+      ) {
+        untouchedMaterializeCalls += 1;
+      }
+    });
+
+    try {
+      expect(
+        jsonPatchToCrdt({
+          base: baseDoc,
+          head: headDoc,
+          patch: [{ op: "replace", path: "/meta/version", value: 2 }],
+          newDot: nextDot,
+          evalTestAgainst: "base",
+          semantics: "sequential",
+        }),
+      ).toEqual({ ok: true });
+    } finally {
+      setMaterializeObserverForTests(null);
+    }
+
+    expect(materialize(headDoc.root)).toEqual({
+      meta: { version: 2 },
+      untouched: { huge },
+    });
     expect(untouchedMaterializeCalls).toBe(0);
   });
 

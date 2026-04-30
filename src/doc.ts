@@ -24,7 +24,6 @@ import {
   PatchCompileError,
   compileJsonPatchToIntent,
   diffJsonPatch,
-  getAtJson,
   jsonEquals,
   parseJsonPointer,
   stringifyJsonPointer,
@@ -36,6 +35,7 @@ import {
   rgaDelete,
   rgaIdAtIndex,
   rgaInsertAfter,
+  rgaLength,
   rgaMaxInsertDotForPrev,
   rgaPrevForInsertAtIndex,
 } from "./rga";
@@ -1390,7 +1390,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
 
   // Sequential mode compiles each op against a rolling snapshot. `shadowBase`
   // tracks that compile-time view without mutating caller-provided `base`.
-  let shadowBase = cloneDoc(evalTestAgainst === "base" ? options.base : options.head);
+  const shadowBase = evalTestAgainst === "base" ? cloneDoc(options.base) : null;
   let shadowCtr = 0;
   const shadowDot = () => ({ actor: "__shadow__", ctr: ++shadowCtr });
   const shadowBump = (ctr: number) => {
@@ -1399,99 +1399,528 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
     }
   };
 
-  const applySequentialOp = (op: JsonPatchOp, opIndex: number): ApplyResult => {
-    const baseJson = materialize(shadowBase.root);
-    let intents: IntentOp[];
-    try {
-      intents = compileJsonPatchToIntent(baseJson, [op], {
-        semantics: "sequential",
-      });
-    } catch (error) {
-      return withOpIndex(toApplyError(error), opIndex);
-    }
-
-    const headStep = applyIntentsToCrdt(
-      shadowBase,
-      options.head,
-      intents,
-      options.newDot,
-      evalTestAgainst,
-      options.bumpCounterAbove,
-      { strictParents: options.strictParents },
-    );
-    if (!headStep.ok) {
-      return withOpIndex(headStep, opIndex);
-    }
-
-    if (evalTestAgainst === "base") {
-      // Keep the compile-time base in lockstep for future operations while using
-      // synthetic dots so we do not consume real actor counters.
-      const shadowStep = applyIntentsToCrdt(
-        shadowBase,
-        shadowBase,
-        intents,
-        shadowDot,
-        "base",
-        shadowBump,
-        { strictParents: options.strictParents },
-      );
-      if (!shadowStep.ok) {
-        return withOpIndex(shadowStep, opIndex);
-      }
-    } else {
-      shadowBase = cloneDoc(options.head);
-    }
-
-    return { ok: true };
+  const session: SequentialCompileSession = {
+    pointerCache: new Map(),
   };
 
-  for (let opIndex = 0; opIndex < options.patch.length; opIndex++) {
-    const op = options.patch[opIndex]!;
-    if (op.op === "move") {
-      const baseJson = materialize(shadowBase.root);
-      let fromValue: JsonValue;
-      try {
-        // Read the source before applying remove so move behaves as "copy then remove".
-        fromValue = structuredClone(getAtJson(baseJson, parseJsonPointer(op.from)));
-      } catch {
-        try {
-          compileJsonPatchToIntent(baseJson, [{ op: "remove", path: op.from }], {
-            semantics: "sequential",
-          });
-        } catch (error) {
-          return withOpIndex(toApplyError(error), opIndex);
-        }
-
-        return withOpIndex(
-          toApplyError(new Error(`failed to resolve move source at ${op.from}`)),
-          opIndex,
-        );
-      }
-
-      if (op.from === op.path) {
-        continue;
-      }
-
-      const removeStep = applySequentialOp({ op: "remove", path: op.from }, opIndex);
-      if (!removeStep.ok) {
-        return removeStep;
-      }
-
-      const addStep = applySequentialOp({ op: "add", path: op.path, value: fromValue }, opIndex);
-      if (!addStep.ok) {
-        return addStep;
-      }
-
-      continue;
-    }
-
-    const step = applySequentialOp(op, opIndex);
+  for (const [opIndex, op] of options.patch.entries()) {
+    const compileBase = evalTestAgainst === "base" ? shadowBase! : options.head;
+    const step = applySequentialPatchOp(
+      options,
+      compileBase,
+      op,
+      opIndex,
+      evalTestAgainst,
+      shadowDot,
+      shadowBump,
+      session,
+    );
     if (!step.ok) {
       return step;
     }
   }
 
   return { ok: true };
+}
+
+type SequentialCompileSession = {
+  pointerCache: Map<string, string[]>;
+};
+
+function applySequentialPatchOp(
+  options: JsonPatchToCrdtOptions,
+  compileBase: Doc,
+  op: JsonPatchOp,
+  opIndex: number,
+  evalTestAgainst: "head" | "base",
+  shadowDot: () => Dot,
+  shadowBump: (ctr: number) => void,
+  session: SequentialCompileSession,
+): ApplyResult {
+  if (op.op === "move") {
+    if (op.from === op.path) {
+      return { ok: true };
+    }
+
+    const fromResolved = resolveValueAtPointerInDoc(
+      compileBase,
+      op.from,
+      opIndex,
+      session.pointerCache,
+    );
+    if (!fromResolved.ok) {
+      return fromResolved;
+    }
+
+    const removeStep = applySingleSequentialPatchStep(
+      options,
+      compileBase,
+      { op: "remove", path: op.from },
+      opIndex,
+      evalTestAgainst,
+      shadowDot,
+      shadowBump,
+      session,
+    );
+    if (!removeStep.ok) {
+      return removeStep;
+    }
+
+    return applySingleSequentialPatchStep(
+      options,
+      compileBase,
+      { op: "add", path: op.path, value: structuredClone(fromResolved.value) },
+      opIndex,
+      evalTestAgainst,
+      shadowDot,
+      shadowBump,
+      session,
+    );
+  }
+
+  if (op.op === "copy") {
+    const fromResolved = resolveValueAtPointerInDoc(
+      compileBase,
+      op.from,
+      opIndex,
+      session.pointerCache,
+    );
+    if (!fromResolved.ok) {
+      return fromResolved;
+    }
+
+    return applySingleSequentialPatchStep(
+      options,
+      compileBase,
+      { op: "add", path: op.path, value: structuredClone(fromResolved.value) },
+      opIndex,
+      evalTestAgainst,
+      shadowDot,
+      shadowBump,
+      session,
+    );
+  }
+
+  return applySingleSequentialPatchStep(
+    options,
+    compileBase,
+    op,
+    opIndex,
+    evalTestAgainst,
+    shadowDot,
+    shadowBump,
+    session,
+  );
+}
+
+function applySingleSequentialPatchStep(
+  options: JsonPatchToCrdtOptions,
+  compileBase: Doc,
+  op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
+  opIndex: number,
+  evalTestAgainst: "head" | "base",
+  shadowDot: () => Dot,
+  shadowBump: (ctr: number) => void,
+  session: SequentialCompileSession,
+): ApplyResult {
+  const compiled = compilePreparedSingleIntentFromDoc(
+    compileBase,
+    op,
+    session.pointerCache,
+    opIndex,
+  );
+  if (!compiled.ok) {
+    return compiled;
+  }
+
+  const headStep = applyIntentsToCrdt(
+    compileBase,
+    options.head,
+    compiled.intents,
+    options.newDot,
+    evalTestAgainst,
+    options.bumpCounterAbove,
+    { strictParents: options.strictParents },
+  );
+  if (!headStep.ok) {
+    return withOpIndex(headStep, opIndex);
+  }
+
+  if (op.op === "test") {
+    return { ok: true };
+  }
+
+  if (evalTestAgainst === "head") {
+    return { ok: true };
+  }
+
+  const shadowStep = applyIntentsToCrdt(
+    compileBase,
+    compileBase,
+    compiled.intents,
+    shadowDot,
+    "base",
+    shadowBump,
+    { strictParents: options.strictParents },
+  );
+  if (!shadowStep.ok) {
+    return withOpIndex(shadowStep, opIndex);
+  }
+
+  return { ok: true };
+}
+
+function resolveValueAtPointerInDoc(
+  doc: Doc,
+  pointer: string,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): { ok: true; value: JsonValue } | ApplyError {
+  const parsedPath = parsePointerWithCache(pointer, pointerCache, opIndex);
+  if (!parsedPath.ok) {
+    return parsedPath;
+  }
+
+  const resolved = resolveNodeAtPath(doc.root, parsedPath.path);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      ...resolved.error,
+      path: pointer,
+      opIndex,
+    };
+  }
+
+  return {
+    ok: true,
+    value: nodeToJsonForPatch(resolved.node),
+  };
+}
+
+function compilePreparedSingleIntentFromDoc(
+  baseDoc: Doc,
+  op: Exclude<JsonPatchOp, { op: "move" | "copy" }>,
+  pointerCache: Map<string, string[]>,
+  opIndex: number,
+): { ok: true; intents: IntentOp[] } | ApplyError {
+  const parsedPath = parsePointerWithCache(op.path, pointerCache, opIndex);
+  if (!parsedPath.ok) {
+    return parsedPath;
+  }
+
+  const path = parsedPath.path;
+  if (op.op === "test") {
+    return {
+      ok: true,
+      intents: [{ t: "Test", path, value: op.value }],
+    };
+  }
+
+  if (path.length === 0) {
+    if (op.op === "remove") {
+      return {
+        ok: false,
+        code: 409,
+        reason: "INVALID_TARGET",
+        message: "remove at root path is not supported in RFC-compliant mode",
+        path: op.path,
+        opIndex,
+      };
+    }
+
+    return {
+      ok: true,
+      intents: [{ t: "ObjSet", path: [], key: ROOT_KEY, value: op.value }],
+    };
+  }
+
+  const parentPath = path.slice(0, -1);
+  const parentPointer = stringifyJsonPointer(parentPath);
+  const key = path[path.length - 1]!;
+  const resolvedParent =
+    parentPath.length === 0
+      ? { ok: true as const, node: baseDoc.root }
+      : resolveNodeAtPath(baseDoc.root, parentPath);
+  if (!resolvedParent.ok) {
+    return {
+      ok: false,
+      ...resolvedParent.error,
+      path: parentPointer,
+      opIndex,
+    };
+  }
+
+  const parentNode = resolvedParent.node;
+  if (parentNode.kind === "seq") {
+    const parsedIndex = parseArrayIndexTokenForDoc(key, op.op, op.path, opIndex);
+    if (!parsedIndex.ok) {
+      return parsedIndex;
+    }
+
+    const boundedIndex = validateArrayIndexBounds(
+      parsedIndex.index,
+      op.op,
+      rgaLength(parentNode),
+      op.path,
+      opIndex,
+    );
+    if (!boundedIndex.ok) {
+      return boundedIndex;
+    }
+
+    if (op.op === "add") {
+      return {
+        ok: true,
+        intents: [{ t: "ArrInsert", path: parentPath, index: boundedIndex.index, value: op.value }],
+      };
+    }
+
+    if (op.op === "remove") {
+      return {
+        ok: true,
+        intents: [{ t: "ArrDelete", path: parentPath, index: boundedIndex.index }],
+      };
+    }
+
+    return {
+      ok: true,
+      intents: [{ t: "ArrReplace", path: parentPath, index: boundedIndex.index, value: op.value }],
+    };
+  }
+
+  if (parentNode.kind !== "obj") {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_TARGET",
+      message: `expected object or array parent at ${parentPointer}`,
+      path: parentPointer,
+      opIndex,
+    };
+  }
+
+  if (key === "__proto__") {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_POINTER",
+      message: `unsafe object key at ${op.path}`,
+      path: op.path,
+      opIndex,
+    };
+  }
+
+  const entry = parentNode.entries.get(key);
+  if ((op.op === "replace" || op.op === "remove") && !entry) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "MISSING_TARGET",
+      message: `missing key ${key} at ${parentPointer}`,
+      path: op.path,
+      opIndex,
+    };
+  }
+
+  if (op.op === "remove") {
+    return {
+      ok: true,
+      intents: [{ t: "ObjRemove", path: parentPath, key }],
+    };
+  }
+
+  return {
+    ok: true,
+    intents: [{ t: "ObjSet", path: parentPath, key, value: op.value, mode: op.op }],
+  };
+}
+
+function parsePointerWithCache(
+  pointer: string,
+  pointerCache: Map<string, string[]>,
+  opIndex: number,
+): { ok: true; path: string[] } | ApplyError {
+  const cachedPath = pointerCache.get(pointer);
+  if (cachedPath !== undefined) {
+    return { ok: true, path: cachedPath.slice() };
+  }
+
+  try {
+    const parsedPath = parseJsonPointer(pointer);
+    pointerCache.set(pointer, parsedPath);
+    return { ok: true, path: parsedPath.slice() };
+  } catch (error) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_POINTER",
+      message: error instanceof Error ? error.message : "invalid pointer",
+      path: pointer,
+      opIndex,
+    };
+  }
+}
+
+function resolveNodeAtPath(
+  root: Node,
+  path: string[],
+):
+  | { ok: true; node: Node }
+  | { ok: false; error: Omit<ApplyError, "ok" | "code"> & { code: 409 } } {
+  let current = root;
+
+  for (const segment of path) {
+    if (current.kind === "obj") {
+      const entry = current.entries.get(segment);
+      if (!entry) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "MISSING_PARENT",
+            message: `Missing key '${segment}'`,
+          },
+        };
+      }
+
+      current = entry.node;
+      continue;
+    }
+
+    if (current.kind === "seq") {
+      if (!ARRAY_INDEX_TOKEN_PATTERN.test(segment)) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "INVALID_POINTER",
+            message: `Expected array index, got '${segment}'`,
+          },
+        };
+      }
+
+      const index = Number(segment);
+      if (!Number.isSafeInteger(index)) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "OUT_OF_BOUNDS",
+            message: `Index out of bounds at '${segment}'`,
+          },
+        };
+      }
+
+      const elemId = rgaIdAtIndex(current, index);
+      if (elemId === undefined) {
+        return {
+          ok: false,
+          error: {
+            code: 409,
+            reason: "OUT_OF_BOUNDS",
+            message: `Index out of bounds at '${segment}'`,
+          },
+        };
+      }
+
+      current = current.elems.get(elemId)!.value;
+      continue;
+    }
+
+    return {
+      ok: false,
+      error: {
+        code: 409,
+        reason: "INVALID_TARGET",
+        message: `Cannot traverse into non-container at '${segment}'`,
+      },
+    };
+  }
+
+  return { ok: true, node: current };
+}
+
+function parseArrayIndexTokenForDoc(
+  token: string,
+  op: "add" | "remove" | "replace",
+  path: string,
+  opIndex: number,
+): { ok: true; index: number } | ApplyError {
+  if (token === "-") {
+    if (op !== "add") {
+      return {
+        ok: false,
+        code: 409,
+        reason: "INVALID_POINTER",
+        message: `'-' index is only valid for add at ${path}`,
+        path,
+        opIndex,
+      };
+    }
+
+    return { ok: true, index: Number.POSITIVE_INFINITY };
+  }
+
+  if (!ARRAY_INDEX_TOKEN_PATTERN.test(token)) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "INVALID_POINTER",
+      message: `expected array index at ${path}`,
+      path,
+      opIndex,
+    };
+  }
+
+  const index = Number(token);
+  if (!Number.isSafeInteger(index)) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "OUT_OF_BOUNDS",
+      message: `array index is too large at ${path}`,
+      path,
+      opIndex,
+    };
+  }
+
+  return { ok: true, index };
+}
+
+function validateArrayIndexBounds(
+  index: number,
+  op: "add" | "remove" | "replace",
+  arrLength: number,
+  path: string,
+  opIndex: number,
+): { ok: true; index: number } | ApplyError {
+  if (op === "add") {
+    if (index === Number.POSITIVE_INFINITY) {
+      return { ok: true, index };
+    }
+
+    if (index > arrLength) {
+      return {
+        ok: false,
+        code: 409,
+        reason: "OUT_OF_BOUNDS",
+        message: `index out of bounds at ${path}; expected 0..${arrLength}`,
+        path,
+        opIndex,
+      };
+    }
+  } else if (index >= arrLength) {
+    return {
+      ok: false,
+      code: 409,
+      reason: "OUT_OF_BOUNDS",
+      message: `index out of bounds at ${path}; expected 0..${Math.max(arrLength - 1, 0)}`,
+      path,
+      opIndex,
+    };
+  }
+
+  return { ok: true, index };
 }
 
 function withOpIndex(error: ApplyError, opIndex: number): ApplyError {
