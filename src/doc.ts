@@ -1439,6 +1439,16 @@ function applySequentialPatchOp(
 ): ApplyResult {
   if (op.op === "move") {
     if (op.from === op.path) {
+      const pathCheck = resolveValueAtPointerInDoc(
+        compileBase,
+        op.from,
+        opIndex,
+        session.pointerCache,
+      );
+      if (!pathCheck.ok) {
+        return pathCheck;
+      }
+
       return { ok: true };
     }
 
