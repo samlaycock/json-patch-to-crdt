@@ -1618,6 +1618,44 @@ describe("crdtToJsonPatch", () => {
     ).toThrow(TraversalDepthError);
   });
 
+  it("diffs localized array edits without materializing unchanged shared sequence elements", () => {
+    const shared = newObj();
+    objSet(shared, "self", shared, dot("A", 1));
+
+    const baseSeq = newSeq();
+    rgaInsertAfter(baseSeq, HEAD, dotToElemId(dot("A", 2)), dot("A", 2), shared);
+    rgaInsertAfter(
+      baseSeq,
+      dotToElemId(dot("A", 2)),
+      dotToElemId(dot("A", 3)),
+      dot("A", 3),
+      newReg(1, dot("A", 3)),
+    );
+
+    const headSeq = newSeq();
+    rgaInsertAfter(headSeq, HEAD, dotToElemId(dot("A", 2)), dot("A", 2), shared);
+    rgaInsertAfter(
+      headSeq,
+      dotToElemId(dot("A", 2)),
+      dotToElemId(dot("A", 4)),
+      dot("A", 4),
+      newReg(2, dot("A", 4)),
+    );
+
+    const baseRoot = newObj();
+    objSet(baseRoot, "list", baseSeq, dot("A", 5));
+
+    const headRoot = newObj();
+    objSet(headRoot, "list", headSeq, dot("A", 6));
+
+    expect(crdtToJsonPatch({ root: baseRoot }, { root: headRoot })).toEqual([
+      { op: "replace", path: "/list/1", value: 2 },
+    ]);
+    expect(() =>
+      crdtToJsonPatch({ root: baseRoot }, { root: headRoot }, { jsonValidation: "strict" }),
+    ).toThrow(TraversalDepthError);
+  });
+
   it("keeps object depth accounting aligned with materialize traversal limits", () => {
     const baseRoot = newObj();
     objSet(baseRoot, "child", newReg(1, dot("A", 1)), dot("A", 2));

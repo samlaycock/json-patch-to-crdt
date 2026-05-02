@@ -1106,6 +1106,71 @@ function rebaseDiffOps(path: string[], nestedOps: JsonPatchOp[], out: JsonPatchO
   }
 }
 
+function collectLiveSequenceElements(seq: RgaSeq): RgaElem[] {
+  const elems: RgaElem[] = [];
+  const cursor = rgaCreateLinearCursor(seq);
+
+  for (let elem = cursor.next(); elem; elem = cursor.next()) {
+    elems.push(elem);
+  }
+
+  return elems;
+}
+
+function materializeSequenceWindow(
+  elems: readonly RgaElem[],
+  start: number,
+  end: number,
+): JsonValue[] {
+  const out: JsonValue[] = [];
+
+  for (let i = start; i < end; i++) {
+    out.push(nodeToJsonForPatch(elems[i]!.value));
+  }
+
+  return out;
+}
+
+function rebaseSequenceWindowDiffOps(
+  path: string[],
+  indexOffset: number,
+  nestedOps: JsonPatchOp[],
+  out: JsonPatchOp[],
+): boolean {
+  for (const op of nestedOps) {
+    if (op.path === "") {
+      return false;
+    }
+
+    const rebasedSegments = parseJsonPointer(op.path);
+    const indexToken = rebasedSegments[0];
+    if (!indexToken || !ARRAY_INDEX_TOKEN_PATTERN.test(indexToken)) {
+      return false;
+    }
+
+    rebasedSegments[0] = String(Number(indexToken) + indexOffset);
+    const rebasedPath = stringifyJsonPointer([...path, ...rebasedSegments]);
+
+    if (op.op === "remove") {
+      out.push({ op: "remove", path: rebasedPath });
+      continue;
+    }
+
+    if (op.op === "add" || op.op === "replace") {
+      out.push({
+        op: op.op,
+        path: rebasedPath,
+        value: op.value,
+      });
+      continue;
+    }
+
+    return false;
+  }
+
+  return true;
+}
+
 function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean {
   assertTraversalDepth(depth);
 
@@ -1276,6 +1341,75 @@ function diffObjectNodes(
   }
 }
 
+function diffSequenceNodes(
+  path: string[],
+  baseNode: RgaSeq,
+  headSeq: RgaSeq,
+  options: DiffOptions,
+  ops: JsonPatchOp[],
+  depth: number,
+): void {
+  const arrayStrategy = options.arrayStrategy ?? "lcs";
+  if (arrayStrategy === "atomic") {
+    const seqOps = diffJsonPatch(materialize(baseNode), materialize(headSeq), options);
+    rebaseDiffOps(path, seqOps, ops);
+    return;
+  }
+
+  const baseElems = collectLiveSequenceElements(baseNode);
+  const headElems = collectLiveSequenceElements(headSeq);
+  const sharedLength = Math.min(baseElems.length, headElems.length);
+
+  let prefixLength = 0;
+  while (
+    prefixLength < sharedLength &&
+    nodesJsonEqual(baseElems[prefixLength]!.value, headElems[prefixLength]!.value, depth + 1)
+  ) {
+    prefixLength += 1;
+  }
+
+  if (prefixLength === baseElems.length && prefixLength === headElems.length) {
+    return;
+  }
+
+  let baseEnd = baseElems.length;
+  let headEnd = headElems.length;
+  while (
+    baseEnd > prefixLength &&
+    headEnd > prefixLength &&
+    nodesJsonEqual(baseElems[baseEnd - 1]!.value, headElems[headEnd - 1]!.value, depth + 1)
+  ) {
+    baseEnd -= 1;
+    headEnd -= 1;
+  }
+
+  const unmatchedBaseLength = baseEnd - prefixLength;
+  const unmatchedHeadLength = headEnd - prefixLength;
+  if (unmatchedBaseLength === 1 && unmatchedHeadLength === 1) {
+    path.push(String(prefixLength));
+    diffNodeToPatch(
+      path,
+      baseElems[prefixLength]!.value,
+      headElems[prefixLength]!.value,
+      options,
+      ops,
+      depth + 1,
+    );
+    path.pop();
+    return;
+  }
+
+  const baseWindow = materializeSequenceWindow(baseElems, prefixLength, baseEnd);
+  const headWindow = materializeSequenceWindow(headElems, prefixLength, headEnd);
+  const seqOps = diffJsonPatch(baseWindow, headWindow, options);
+  if (rebaseSequenceWindowDiffOps(path, prefixLength, seqOps, ops)) {
+    return;
+  }
+
+  const fallbackSeqOps = diffJsonPatch(materialize(baseNode), materialize(headSeq), options);
+  rebaseDiffOps(path, fallbackSeqOps, ops);
+}
+
 function diffNodeToPatch(
   path: string[],
   baseNode: Node,
@@ -1321,9 +1455,7 @@ function diffNodeToPatch(
     return;
   }
 
-  const headSeq = headNode as RgaSeq;
-  const seqOps = diffJsonPatch(materialize(baseNode), materialize(headSeq), options);
-  rebaseDiffOps(path, seqOps, ops);
+  diffSequenceNodes(path, baseNode as RgaSeq, headNode as RgaSeq, options, ops, depth);
 }
 
 /**
