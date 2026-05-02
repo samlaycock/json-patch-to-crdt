@@ -1331,6 +1331,22 @@ describe("jsonPatchToCrdt", () => {
     expect(materialize(headDoc.root)).toEqual({ a: 1 });
   });
 
+  it("rejects self-move when the source path does not exist", () => {
+    const baseJson: JsonValue = {};
+    const baseDoc = docFromJsonWithDot(baseJson, dot("A", 0));
+    const headDoc = cloneDoc(baseDoc);
+    const patch: JsonPatchOp[] = [{ op: "move", from: "/missing", path: "/missing" }];
+
+    const res = jsonPatchToCrdt(baseDoc, headDoc, patch, newDotGen("A", 1));
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.reason).toBe("MISSING_PARENT");
+      expect(res.path).toBe("/missing");
+      expect(res.opIndex).toBe(0);
+    }
+    expect(materialize(headDoc.root)).toEqual({});
+  });
+
   it("matches applyPatch for sequential move edge cases", () => {
     const patch: JsonPatchOp[] = [{ op: "move", from: "/list/0", path: "/list/2" }];
     const state = createState({ list: ["a", "b", "c"] }, { actor: "A" });
