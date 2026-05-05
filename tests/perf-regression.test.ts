@@ -461,7 +461,7 @@ describe("performance regressions", () => {
     Object.defineProperty(Array.prototype, Symbol.iterator, {
       configurable: true,
       value: function iterator(this: unknown[]): ArrayIterator<unknown> {
-        if (this.every((value) => typeof value === "string")) {
+        if (this.length > 0 && this.every((value) => typeof value === "string")) {
           pathArrayIteratorCalls += 1;
         }
         return originalIterator.call(this);
