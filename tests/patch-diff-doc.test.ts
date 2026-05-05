@@ -1656,6 +1656,25 @@ describe("crdtToJsonPatch", () => {
     ).toThrow(TraversalDepthError);
   });
 
+  it("falls back cleanly when a rebased array window diff emits copy operations", () => {
+    const baseJson: JsonValue = { list: ["anchor", 0, "tail"] };
+    const headJson: JsonValue = { list: ["anchor", 0, 1, 0, "tail"] };
+    const base = docFromJsonWithDot(baseJson, dot("A", 1));
+    const head = docFromJsonWithDot(headJson, dot("B", 1));
+
+    const patch = crdtToJsonPatch(base, head, {
+      arrayStrategy: "lcs",
+      emitMoves: true,
+      emitCopies: true,
+    });
+
+    expect(patch).toEqual([
+      { op: "add", path: "/list/2", value: 1 },
+      { op: "add", path: "/list/3", value: 0 },
+    ]);
+    expect(applyJsonPatch(baseJson, patch)).toEqual(headJson);
+  });
+
   it("keeps object depth accounting aligned with materialize traversal limits", () => {
     const baseRoot = newObj();
     objSet(baseRoot, "child", newReg(1, dot("A", 1)), dot("A", 2));

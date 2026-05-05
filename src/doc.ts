@@ -1137,6 +1137,8 @@ function rebaseSequenceWindowDiffOps(
   nestedOps: JsonPatchOp[],
   out: JsonPatchOp[],
 ): boolean {
+  const pending: JsonPatchOp[] = [];
+
   for (const op of nestedOps) {
     if (op.path === "") {
       return false;
@@ -1152,12 +1154,12 @@ function rebaseSequenceWindowDiffOps(
     const rebasedPath = stringifyJsonPointer([...path, ...rebasedSegments]);
 
     if (op.op === "remove") {
-      out.push({ op: "remove", path: rebasedPath });
+      pending.push({ op: "remove", path: rebasedPath });
       continue;
     }
 
     if (op.op === "add" || op.op === "replace") {
-      out.push({
+      pending.push({
         op: op.op,
         path: rebasedPath,
         value: op.value,
@@ -1168,6 +1170,7 @@ function rebaseSequenceWindowDiffOps(
     return false;
   }
 
+  out.push(...pending);
   return true;
 }
 
