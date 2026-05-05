@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock } from "bun:test";
 
 import type { JsonPatchOp, JsonValue } from "../src";
 import type { IntentOp, RgaElem, RgaSeq } from "../src/internals";
@@ -610,5 +610,50 @@ describe("performance regressions", () => {
     }
 
     expect(valuesCalls).toBeLessThanOrEqual(2);
+  });
+
+  it("avoids rescanning merged documents to recover mergeState actor counters", async () => {
+    const versionVectorModule = await import("../src/version-vector");
+    const observedVersionVector = mock(versionVectorModule.observedVersionVector);
+
+    void mock.module("../src/version-vector", () => ({
+      ...versionVectorModule,
+      observedVersionVector,
+    }));
+
+    const { applyPatch, cloneDoc, createClock, createState, forkState, mergeState, toJson } =
+      await import("../src/internals");
+
+    const base = createState(
+      {
+        profile: {
+          name: "Ada",
+          stats: { visits: 0 },
+        },
+      },
+      { actor: "A" },
+    );
+    const advancedA = applyPatch(base, [
+      { op: "replace", path: "/profile/stats/visits", value: 1 },
+      { op: "add", path: "/profile/title", value: "Engineer" },
+    ]);
+    const staleA = {
+      doc: cloneDoc(advancedA.doc),
+      clock: createClock("A", 3),
+    };
+    const peerB = applyPatch(forkState(base, "B"), [{ op: "add", path: "/team", value: "core" }]);
+
+    const merged = mergeState(staleA, peerB, { actor: "A" });
+
+    expect(toJson(merged)).toEqual({
+      profile: {
+        name: "Ada",
+        stats: { visits: 1 },
+        title: "Engineer",
+      },
+      team: "core",
+    });
+    expect(merged.clock.ctr).toBe(advancedA.clock.ctr);
+    expect(observedVersionVector).not.toHaveBeenCalled();
   });
 });
