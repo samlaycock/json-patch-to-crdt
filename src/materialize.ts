@@ -6,6 +6,7 @@ import { rgaCreateLinearCursor } from "./rga";
 type MaterializeObserver = (path: readonly string[], node: Node) => void;
 
 let materializeObserver: MaterializeObserver | null = null;
+const EMPTY_PATH: readonly string[] = [];
 
 export function setMaterializeObserverForTests(observer: MaterializeObserver | null): void {
   materializeObserver = observer;
@@ -31,7 +32,7 @@ function setMaterializedProperty(
 /** Convert a CRDT node graph into a plain JSON value using an explicit stack. */
 export function materialize(node: Node): JsonValue {
   const observer = materializeObserver;
-  observer?.([], node);
+  observer?.(EMPTY_PATH, node);
 
   if (node.kind === "lww") {
     return node.value;
@@ -88,7 +89,7 @@ export function materialize(node: Node): JsonValue {
       const child = entry.node;
       const childDepth = frame.depth + 1;
       assertTraversalDepth(childDepth);
-      const childPath = [...frame.path, key];
+      const childPath = observer ? [...frame.path, key] : EMPTY_PATH;
       observer?.(childPath, child);
 
       if (child.kind === "lww") {
@@ -131,7 +132,7 @@ export function materialize(node: Node): JsonValue {
     const child = elem.value;
     const childDepth = frame.depth + 1;
     assertTraversalDepth(childDepth);
-    const childPath = [...frame.path, String(frame.nextIndex)];
+    const childPath = observer ? [...frame.path, String(frame.nextIndex)] : EMPTY_PATH;
     frame.nextIndex += 1;
     observer?.(childPath, child);
 
