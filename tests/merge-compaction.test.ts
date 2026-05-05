@@ -543,14 +543,16 @@ describe("mergeState", () => {
       expect(nonThrowing.error.reason).toBe("MAX_DEPTH_EXCEEDED");
     }
 
-    expect(() => mergeState(a, b)).toThrow(MergeError);
+    let thrown: unknown;
     try {
       mergeState(a, b);
     } catch (error) {
-      expect(error).toBeInstanceOf(MergeError);
-      if (error instanceof MergeError) {
-        expect(error.reason).toBe("MAX_DEPTH_EXCEEDED");
-      }
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MergeError);
+    if (thrown instanceof MergeError) {
+      expect(thrown.reason).toBe("MAX_DEPTH_EXCEEDED");
     }
   });
 
