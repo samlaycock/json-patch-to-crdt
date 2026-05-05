@@ -436,6 +436,53 @@ describe("performance regressions", () => {
     expect(untouchedMaterializeCalls).toBe(0);
   });
 
+  it("avoids observer path-array cloning when no materialize observer is installed", () => {
+    const value: JsonValue = {
+      alpha: {
+        beta: {
+          gamma: 1,
+          delta: 2,
+        },
+      },
+      epsilon: {
+        zeta: 3,
+      },
+    };
+    const doc = docFromJson(
+      value,
+      (() => {
+        let ctr = 0;
+        return () => ({ actor: "perf", ctr: ++ctr });
+      })(),
+    );
+    const originalIterator = Array.prototype[Symbol.iterator];
+    let pathArrayIteratorCalls = 0;
+
+    Object.defineProperty(Array.prototype, Symbol.iterator, {
+      configurable: true,
+      value: function iterator(this: unknown[]): ArrayIterator<unknown> {
+        if (this.every((value) => typeof value === "string")) {
+          pathArrayIteratorCalls += 1;
+        }
+        return originalIterator.call(this);
+      },
+    });
+
+    let materialized: JsonValue;
+    try {
+      setMaterializeObserverForTests(null);
+      materialized = materialize(doc.root);
+    } finally {
+      Object.defineProperty(Array.prototype, Symbol.iterator, {
+        configurable: true,
+        value: originalIterator,
+      });
+    }
+
+    expect(materialized!).toEqual(value);
+    expect(pathArrayIteratorCalls).toBe(0);
+  });
+
   it("compacts high-volume stable tombstones without changing materialized output", () => {
     const initial: Record<string, JsonValue> = {};
     for (let i = 0; i < 400; i++) {
