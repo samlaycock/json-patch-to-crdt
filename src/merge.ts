@@ -14,6 +14,7 @@ import type {
   RgaSeq,
   TryMergeDocResult,
   TryMergeStateResult,
+  UnrelatedArraysStrategy,
 } from "./types";
 
 import { createClock } from "./clock";
@@ -39,6 +40,11 @@ type MergeNodeResult = {
 type MergeDocResult = {
   doc: Doc;
   maxObservedCtr: number;
+};
+
+type MergeConfig = {
+  actor?: ActorId;
+  unrelatedArrays: UnrelatedArraysStrategy;
 };
 
 /** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
@@ -81,22 +87,27 @@ export function mergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): Doc {
 /** Non-throwing `mergeDoc` variant with structured conflict details. */
 export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryMergeDocResult {
   try {
-    const requireSharedOrigin = options.requireSharedOrigin ?? true;
-    const mismatchPath = requireSharedOrigin ? findSeqLineageMismatch(a.root, b.root, []) : null;
-    if (mismatchPath !== null) {
-      return {
-        ok: false,
-        error: {
+    const config: MergeConfig = {
+      unrelatedArrays: resolveUnrelatedArraysStrategy(options),
+    };
+
+    if (config.unrelatedArrays === "reject") {
+      const mismatchPath = findSeqLineageMismatch(a.root, b.root, []);
+      if (mismatchPath !== null) {
+        return {
           ok: false,
-          code: 409,
-          reason: "LINEAGE_MISMATCH",
-          message: `merge requires shared array origin at ${mismatchPath}`,
-          path: mismatchPath,
-        },
-      };
+          error: {
+            ok: false,
+            code: 409,
+            reason: "LINEAGE_MISMATCH",
+            message: `merge requires shared array origin at ${mismatchPath}`,
+            path: mismatchPath,
+          },
+        };
+      }
     }
 
-    return { ok: true, doc: mergeDocRoot(a.root, b.root).doc };
+    return { ok: true, doc: mergeDocRoot(a.root, b.root, config).doc };
   } catch (error) {
     if (error instanceof SharedElementMetadataMismatchError) {
       return {
@@ -146,25 +157,29 @@ export function tryMergeState(
   options: MergeStateOptions = {},
 ): TryMergeStateResult {
   try {
-    const requireSharedOrigin = options.requireSharedOrigin ?? true;
-    const mismatchPath = requireSharedOrigin
-      ? findSeqLineageMismatch(a.doc.root, b.doc.root, [])
-      : null;
-    if (mismatchPath !== null) {
-      return {
-        ok: false,
-        error: {
+    const actor = options.actor ?? a.clock.actor;
+    const config: MergeConfig = {
+      actor,
+      unrelatedArrays: resolveUnrelatedArraysStrategy(options),
+    };
+
+    if (config.unrelatedArrays === "reject") {
+      const mismatchPath = findSeqLineageMismatch(a.doc.root, b.doc.root, []);
+      if (mismatchPath !== null) {
+        return {
           ok: false,
-          code: 409,
-          reason: "LINEAGE_MISMATCH",
-          message: `merge requires shared array origin at ${mismatchPath}`,
-          path: mismatchPath,
-        },
-      };
+          error: {
+            ok: false,
+            code: 409,
+            reason: "LINEAGE_MISMATCH",
+            message: `merge requires shared array origin at ${mismatchPath}`,
+            path: mismatchPath,
+          },
+        };
+      }
     }
 
-    const actor = options.actor ?? a.clock.actor;
-    const merged = mergeDocRoot(a.doc.root, b.doc.root, actor);
+    const merged = mergeDocRoot(a.doc.root, b.doc.root, config);
     const ctr = maxObservedCtrForActor(merged.maxObservedCtr, actor, a, b);
     return { ok: true, state: { doc: merged.doc, clock: createClock(actor, ctr) } };
   } catch (error) {
@@ -237,9 +252,17 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
   return null;
 }
 
-function mergeDocRoot(a: Node, b: Node, actor?: ActorId): MergeDocResult {
-  const merged = mergeNodeAtDepth(a, b, 0, [], actor);
+function mergeDocRoot(a: Node, b: Node, config: MergeConfig): MergeDocResult {
+  const merged = mergeNodeAtDepth(a, b, 0, [], config);
   return { doc: { root: merged.node }, maxObservedCtr: merged.maxObservedCtr };
+}
+
+function resolveUnrelatedArraysStrategy(
+  options: MergeDocOptions | MergeStateOptions,
+): UnrelatedArraysStrategy {
+  if (options.unrelatedArrays !== undefined) return options.unrelatedArrays;
+  if (options.requireSharedOrigin === false) return "unsafe-union";
+  return "reject";
 }
 
 function maxObservedCtrForActor(
@@ -313,19 +336,19 @@ function mergeNodeAtDepth(
   b: Node,
   depth: number,
   path: string[],
-  actor?: ActorId,
+  config: MergeConfig,
 ): MergeNodeResult {
   assertTraversalDepth(depth);
 
   // Same kind → merge semantics
-  if (a.kind === "lww" && b.kind === "lww") return mergeLww(a, b, actor);
-  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b, depth + 1, path, actor);
-  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, depth + 1, path, actor);
+  if (a.kind === "lww" && b.kind === "lww") return mergeLww(a, b, config.actor);
+  if (a.kind === "obj" && b.kind === "obj") return mergeObj(a, b, depth + 1, path, config);
+  if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, depth + 1, path, config);
 
   // Kind mismatch: higher representative dot wins entirely.
   const cmp = compareDot(repDot(a), repDot(b));
-  if (cmp >= 0) return cloneNodeShallow(a, depth + 1, actor);
-  return cloneNodeShallow(b, depth + 1, actor);
+  if (cmp >= 0) return cloneNodeShallow(a, depth + 1, config.actor);
+  return cloneNodeShallow(b, depth + 1, config.actor);
 }
 
 function mergeLww(a: LwwReg, b: LwwReg, actor?: ActorId): MergeNodeResult {
@@ -346,7 +369,7 @@ function mergeObj(
   b: ObjNode,
   depth: number,
   path: string[],
-  actor?: ActorId,
+  config: MergeConfig,
 ): MergeNodeResult {
   assertTraversalDepth(depth);
   const entries = new Map<string, { node: Node; dot: Dot }>();
@@ -361,13 +384,13 @@ function mergeObj(
     if (da && db) {
       const mergedDot = compareDot(da, db) >= 0 ? { ...da } : { ...db };
       tombstone.set(key, mergedDot);
-      maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(mergedDot, actor));
+      maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(mergedDot, config.actor));
     } else if (da) {
       tombstone.set(key, { ...da });
-      maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(da, actor));
+      maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(da, config.actor));
     } else {
       tombstone.set(key, { ...db! });
-      maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(db!, actor));
+      maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(db!, config.actor));
     }
   }
 
@@ -380,16 +403,16 @@ function mergeObj(
     let merged: { node: Node; dot: Dot };
     let mergedNodeMaxObservedCtr = 0;
     if (ea && eb) {
-      const mergedNode = mergeNodeAtDepth(ea.node, eb.node, depth + 1, [...path, key], actor);
+      const mergedNode = mergeNodeAtDepth(ea.node, eb.node, depth + 1, [...path, key], config);
       const dot = compareDot(ea.dot, eb.dot) >= 0 ? { ...ea.dot } : { ...eb.dot };
       merged = { node: mergedNode.node, dot };
       mergedNodeMaxObservedCtr = mergedNode.maxObservedCtr;
     } else if (ea) {
-      const cloned = cloneNodeShallow(ea.node, depth + 1, actor);
+      const cloned = cloneNodeShallow(ea.node, depth + 1, config.actor);
       merged = { node: cloned.node, dot: { ...ea.dot } };
       mergedNodeMaxObservedCtr = cloned.maxObservedCtr;
     } else {
-      const cloned = cloneNodeShallow(eb!.node, depth + 1, actor);
+      const cloned = cloneNodeShallow(eb!.node, depth + 1, config.actor);
       merged = { node: cloned.node, dot: { ...eb!.dot } };
       mergedNodeMaxObservedCtr = cloned.maxObservedCtr;
     }
@@ -404,7 +427,7 @@ function mergeObj(
     maxObservedCtr = Math.max(
       maxObservedCtr,
       mergedNodeMaxObservedCtr,
-      maxObservedCtrForDot(merged.dot, actor),
+      maxObservedCtrForDot(merged.dot, config.actor),
     );
   }
 
@@ -416,9 +439,26 @@ function mergeSeq(
   b: RgaSeq,
   depth: number,
   path: string[],
-  actor?: ActorId,
+  config: MergeConfig,
 ): MergeNodeResult {
   assertTraversalDepth(depth);
+
+  // Atomic-replace: when both seqs are non-empty and share no element IDs,
+  // the one with the higher representative dot wins entirely.
+  if (config.unrelatedArrays === "atomic-replace" && a.elems.size > 0 && b.elems.size > 0) {
+    let shared = false;
+    for (const id of a.elems.keys()) {
+      if (b.elems.has(id)) {
+        shared = true;
+        break;
+      }
+    }
+    if (!shared) {
+      const winner = compareDot(repDot(a), repDot(b)) >= 0 ? a : b;
+      return cloneNodeShallow(winner, depth, config.actor);
+    }
+  }
+
   const elems = new Map<string, RgaElem>();
   let maxObservedCtr = 0;
 
@@ -441,7 +481,7 @@ function mergeSeq(
       // - tombstone: true if either side tombstoned it
       // - value: recursively merge child nodes
       // - prev/insDot are validated to match before merge
-      const mergedValue = mergeNodeAtDepth(ea.value, eb.value, depth + 1, [...path, id], actor);
+      const mergedValue = mergeNodeAtDepth(ea.value, eb.value, depth + 1, [...path, id], config);
       const mergedDeleteDot = mergeDeleteDot(ea.delDot, eb.delDot);
       elems.set(id, {
         id,
@@ -454,15 +494,15 @@ function mergeSeq(
       maxObservedCtr = Math.max(
         maxObservedCtr,
         mergedValue.maxObservedCtr,
-        maxObservedCtrForDot(ea.insDot, actor),
-        maxObservedCtrForDot(mergedDeleteDot, actor),
+        maxObservedCtrForDot(ea.insDot, config.actor),
+        maxObservedCtrForDot(mergedDeleteDot, config.actor),
       );
     } else if (ea) {
-      const cloned = cloneElem(ea, depth + 1, actor);
+      const cloned = cloneElem(ea, depth + 1, config.actor);
       elems.set(id, cloned.elem);
       maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
     } else {
-      const cloned = cloneElem(eb!, depth + 1, actor);
+      const cloned = cloneElem(eb!, depth + 1, config.actor);
       elems.set(id, cloned.elem);
       maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
     }

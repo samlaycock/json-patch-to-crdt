@@ -331,6 +331,17 @@ export type TryApplyPatchInPlaceResult = { ok: true } | { ok: false; error: Appl
 /** Non-throwing result for patch validation preflight. */
 export type ValidatePatchResult = { ok: true } | { ok: false; error: ApplyError };
 
+/**
+ * Merge strategy applied when two non-empty array sequences share no element lineage.
+ *
+ * - `"reject"` – abort the merge and return a `LINEAGE_MISMATCH` error (default).
+ * - `"atomic-replace"` – replace the losing array entirely with the one that has
+ *   the higher representative dot (causal last-write-wins at the array level).
+ * - `"unsafe-union"` – union all elements from both sequences without any lineage
+ *   check. Element ordering may be non-deterministic across peers.
+ */
+export type UnrelatedArraysStrategy = "reject" | "atomic-replace" | "unsafe-union";
+
 /** Options for `mergeState`. */
 export type MergeStateOptions = {
   /**
@@ -339,8 +350,15 @@ export type MergeStateOptions = {
    */
   actor?: ActorId;
   /**
-   * Require array sequences to share element lineage before merging.
-   * Defaults to `true`.
+   * Strategy for merging unrelated (non-overlapping) non-empty array sequences.
+   * Defaults to `"reject"`.
+   */
+  unrelatedArrays?: UnrelatedArraysStrategy;
+  /**
+   * @deprecated Use `unrelatedArrays` instead.
+   * When `true`, behaves like `unrelatedArrays: "reject"`.
+   * When `false`, behaves like `unrelatedArrays: "unsafe-union"`.
+   * Ignored when `unrelatedArrays` is also provided.
    */
   requireSharedOrigin?: boolean;
 };
@@ -348,8 +366,15 @@ export type MergeStateOptions = {
 /** Options for `mergeDoc`. */
 export type MergeDocOptions = {
   /**
-   * Require array sequences to share element lineage before merging.
-   * Defaults to `true`.
+   * Strategy for merging unrelated (non-overlapping) non-empty array sequences.
+   * Defaults to `"reject"`.
+   */
+  unrelatedArrays?: UnrelatedArraysStrategy;
+  /**
+   * @deprecated Use `unrelatedArrays` instead.
+   * When `true`, behaves like `unrelatedArrays: "reject"`.
+   * When `false`, behaves like `unrelatedArrays: "unsafe-union"`.
+   * Ignored when `unrelatedArrays` is also provided.
    */
   requireSharedOrigin?: boolean;
 };

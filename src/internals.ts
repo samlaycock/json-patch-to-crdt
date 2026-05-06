@@ -72,6 +72,7 @@ export type {
   JsonPatchToCrdtOptions,
   LwwReg,
   MergeDocOptions,
+  UnrelatedArraysStrategy,
   Node,
   ObjEntry,
   ObjNode,

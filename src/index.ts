@@ -19,6 +19,7 @@ export type {
   JsonPrimitive,
   JsonValue,
   MergeStateOptions,
+  UnrelatedArraysStrategy,
   PatchErrorReason,
   PatchSemantics,
   SerializedState,

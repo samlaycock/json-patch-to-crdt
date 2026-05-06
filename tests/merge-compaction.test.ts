@@ -352,6 +352,79 @@ describe("mergeDoc", () => {
     expect(materialize(merged.root)).toEqual([1, 1]);
   });
 
+  it("unsafe-union unions all elements from unrelated arrays", () => {
+    const a = docFromJson([1, 2], newDotGen("A"));
+    const b = docFromJson([3, 4], newDotGen("B"));
+    const merged = mergeDoc(a, b, { unrelatedArrays: "unsafe-union" });
+    const result = materialize(merged.root) as number[];
+    expect(result).toHaveLength(4);
+    expect(result.sort((x, y) => x - y)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("atomic-replace picks the causally newer unrelated array", () => {
+    const genA = newDotGen("A");
+    const genB = newDotGen("B");
+    // B gets a higher counter by consuming more dots
+    const a = docFromJson([1, 2], genA);
+    const b = docFromJson([3, 4, 5], genB);
+    const mergedAB = mergeDoc(a, b, { unrelatedArrays: "atomic-replace" });
+    const mergedBA = mergeDoc(b, a, { unrelatedArrays: "atomic-replace" });
+    // Both directions should agree — the winner is deterministic
+    expect(materialize(mergedAB.root)).toEqual(materialize(mergedBA.root));
+  });
+
+  it("atomic-replace keeps the array with the highest representative dot", () => {
+    // A is created first, then B is created independently with more elements
+    // so B's highest dot counter will be higher
+    const genA = newDotGen("A");
+    const a = docFromJson([99], genA);
+    const genB = newDotGen("B");
+    // burn dots on B so its rep dot is definitively higher
+    genB();
+    genB();
+    genB();
+    const b = docFromJson([1, 2], genB);
+    const merged = mergeDoc(a, b, { unrelatedArrays: "atomic-replace" });
+    expect(materialize(merged.root)).toEqual([1, 2]);
+  });
+
+  it("atomic-replace falls through to normal merge when arrays share elements", () => {
+    const origin = docFromJson([1, 2], newDotGen("origin"));
+    const a = cloneDoc(origin);
+    const b = cloneDoc(origin);
+    // Both still share elements — normal merge should apply
+    const merged = mergeDoc(a, b, { unrelatedArrays: "atomic-replace" });
+    expect(materialize(merged.root)).toEqual([1, 2]);
+  });
+
+  it("atomic-replace works for nested unrelated arrays inside an object", () => {
+    const genA = newDotGen("A");
+    const genB = newDotGen("B");
+    const a = docFromJson({ items: [10, 20] }, genA);
+    const b = docFromJson({ items: [30, 40, 50] }, genB);
+    const mergedAB = mergeDoc(a, b, { unrelatedArrays: "atomic-replace" });
+    const mergedBA = mergeDoc(b, a, { unrelatedArrays: "atomic-replace" });
+    expect(materialize(mergedAB.root)).toEqual(materialize(mergedBA.root));
+  });
+
+  it("reject strategy behaves identically to the default", () => {
+    const a = docFromJson([1], newDotGen("A"));
+    const b = docFromJson([1], newDotGen("B"));
+    expect(() => mergeDoc(a, b, { unrelatedArrays: "reject" })).toThrow(MergeError);
+    const res = tryMergeDoc(a, b, { unrelatedArrays: "reject" });
+    expect(res.ok).toBeFalse();
+    if (!res.ok) expect(res.error.reason).toBe("LINEAGE_MISMATCH");
+  });
+
+  it("unrelatedArrays option takes precedence over deprecated requireSharedOrigin", () => {
+    const a = docFromJson([1], newDotGen("A"));
+    const b = docFromJson([1], newDotGen("B"));
+    // unrelatedArrays: "unsafe-union" should win even though requireSharedOrigin: true
+    const merged = mergeDoc(a, b, { unrelatedArrays: "unsafe-union", requireSharedOrigin: true });
+    const result = materialize(merged.root) as number[];
+    expect(result).toHaveLength(2);
+  });
+
   it("rejects shared RGA ids when predecessor metadata disagrees", () => {
     const origin = createState({ list: ["a", "b"] }, { actor: "origin" });
     const a = cloneDoc(origin.doc);
