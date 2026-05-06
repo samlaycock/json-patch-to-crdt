@@ -1,5 +1,62 @@
 # json-patch-to-crdt
 
+## 0.5.0
+
+### Minor Changes
+
+- 8b9c662: Add configurable `unrelatedArrays` merge strategy for non-overlapping array sequences.
+
+  The existing `requireSharedOrigin` boolean was too coarse for real integrations: callers had
+  to choose between rejecting all unrelated arrays or accepting the current unsafe-union semantics.
+
+  This change introduces an explicit `UnrelatedArraysStrategy` type with three values:
+
+  - `"reject"` – abort the merge with a `LINEAGE_MISMATCH` error (the default, identical to `requireSharedOrigin: true`)
+  - `"atomic-replace"` – replace the losing array entirely with the one that has the higher representative dot (causal last-write-wins at the array level), keeping merge results deterministic across peers
+  - `"unsafe-union"` – union all elements without a lineage check (equivalent to the old `requireSharedOrigin: false`)
+
+  The new option is available on both `MergeDocOptions` and `MergeStateOptions`. When `unrelatedArrays`
+  is set it takes precedence over the now-deprecated `requireSharedOrigin` boolean, which is kept for
+  backwards compatibility.
+
+  The `atomic-replace` strategy is applied recursively at each array node in the document tree, so
+  nested unrelated arrays inside objects are also handled correctly.
+
+### Patch Changes
+
+- 09ea4ae: Fix mixed object/array path traversal during patch application so valid JSON Patch paths like
+  `/list/0/x` and `/list/0/0` work against CRDT-backed documents.
+
+  The apply layer now resolves parent paths through sequence elements instead of assuming every
+  intermediate segment is an object, and adds regression tests for nested object and nested array
+  replacements through array elements.
+
+- 63f391b: Fix kind-mismatch merge resolution so it considers the newest dot anywhere in the
+  competing subtrees instead of only shallow container metadata.
+
+  This preserves causally newer deep edits when they race with a concurrent
+  replacement of the parent path by a different node kind, and adds a regression
+  test covering the nested `/k/a/b` reproduction from Issue #122.
+
+- dda8fbc: Preserve typed lookup failures for `test` operations instead of collapsing
+  array-token and non-container traversal errors into `MISSING_TARGET`.
+
+  This keeps invalid array tokens mapped to `INVALID_POINTER`, non-container
+  traversal mapped to `INVALID_TARGET`, and adds regression coverage for the
+  Issue #123 reproductions.
+
+- c65065a: Optimize `validateJsonPatch` to use a private in-place validation path and avoid the extra immutable clone when validating patches against JSON input.
+- 4602457: Optimize `jsonPatchToCrdt` sequential compilation so it resolves paths directly from the rolling CRDT document view instead of materializing the full shadow document for each operation, and add a regression test that guards against rematerializing unrelated branches.
+- 72b6141: Extend `crdtToJsonPatch` with a CRDT-native sequence diff path that trims unchanged array prefixes and suffixes before materializing only the edited window, and add a regression test covering localized array edits around unchanged cyclic shared elements.
+- ae687ec: Avoid cloning `materialize` observer path arrays unless the test-only materialize observer is installed, and add a regression test that guards the hot path against observer-only path allocation work.
+- af1509d: Avoid a second full merged-document scan when recovering the selected actor counter in `mergeState`.
+
+  `mergeState` now threads the chosen actor's highest observed counter through the merge traversal itself, preserving the existing clock recovery behavior without calling `observedVersionVector(...)` on the merged document afterward.
+
+- 95a07d1: Deprecate `docFromJsonWithDot(...)` on the `./internals` surface and document why
+  production callers should prefer `docFromJson(value, nextDot)` for unique causal
+  metadata.
+
 ## 0.4.0
 
 ### Minor Changes
