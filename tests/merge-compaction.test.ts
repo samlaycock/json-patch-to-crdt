@@ -362,15 +362,15 @@ describe("mergeDoc", () => {
   });
 
   it("atomic-replace picks the causally newer unrelated array", () => {
-    const genA = newDotGen("A");
-    const genB = newDotGen("B");
-    // B gets a higher counter by consuming more dots
-    const a = docFromJson([1, 2], genA);
-    const b = docFromJson([3, 4, 5], genB);
+    // a gets dots A:1, A:2 (repDot = A:2 → ctr 2)
+    // b gets dots B:1, B:2, B:3 (repDot = B:3 → ctr 3)
+    // B wins because ctr 3 > ctr 2
+    const a = docFromJson([1, 2], newDotGen("A"));
+    const b = docFromJson([3, 4, 5], newDotGen("B"));
     const mergedAB = mergeDoc(a, b, { unrelatedArrays: "atomic-replace" });
     const mergedBA = mergeDoc(b, a, { unrelatedArrays: "atomic-replace" });
-    // Both directions should agree — the winner is deterministic
-    expect(materialize(mergedAB.root)).toEqual(materialize(mergedBA.root));
+    expect(materialize(mergedAB.root)).toEqual([3, 4, 5]);
+    expect(materialize(mergedBA.root)).toEqual([3, 4, 5]);
   });
 
   it("atomic-replace keeps the array with the highest representative dot", () => {
