@@ -17,6 +17,7 @@ export {
 } from "./clock";
 
 // Advanced document/intent helpers.
+// `docFromJsonWithDot` is a deprecated legacy fixture helper that reuses causal metadata.
 export {
   docFromJson,
   docFromJsonWithDot,
