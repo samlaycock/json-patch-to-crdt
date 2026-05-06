@@ -2,6 +2,8 @@ import type { CrdtState, Doc, Dot, Node, VersionVector } from "./types";
 
 import { assertTraversalDepth } from "./depth";
 
+let observedVersionVectorObserverForTests: ((target: Doc | CrdtState) => void) | null = null;
+
 export function readVersionVectorCounter(vv: VersionVector, actor: string): number | undefined {
   if (!Object.prototype.hasOwnProperty.call(vv, actor)) {
     return undefined;
@@ -34,6 +36,7 @@ export function observeVersionVectorDot(vv: VersionVector, dot: Dot): void {
  * of the currently materialized document tree.
  */
 export function observedVersionVector(target: Doc | CrdtState): VersionVector {
+  observedVersionVectorObserverForTests?.(target);
   const doc = "doc" in target ? target.doc : target;
   const vv = Object.create(null) as VersionVector;
   if ("clock" in target) {
@@ -72,6 +75,12 @@ export function observedVersionVector(target: Doc | CrdtState): VersionVector {
   }
 
   return vv;
+}
+
+export function setObservedVersionVectorObserverForTests(
+  observer: ((target: Doc | CrdtState) => void) | null,
+): void {
+  observedVersionVectorObserverForTests = observer;
 }
 
 /** Combine version vectors using per-actor maxima. */

@@ -1,3 +1,4 @@
+---
 "json-patch-to-crdt": patch
 ---
 

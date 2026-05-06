@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
 import type { JsonPatchOp, JsonValue } from "../src";
 import type { IntentOp, RgaElem, RgaSeq } from "../src/internals";
@@ -9,18 +9,22 @@ import {
   compactStateTombstones,
   createState,
   diffJsonPatch,
+  forkState,
+  mergeState,
   toJson,
 } from "../src";
 import {
   applyIntentsToCrdt,
   cloneDoc,
   compileJsonPatchToIntent,
+  createClock,
   docFromJson,
   jsonPatchToCrdt,
   materialize,
   stableJsonValueKey,
 } from "../src/internals";
 import { setMaterializeObserverForTests } from "../src/materialize";
+import { setObservedVersionVectorObserverForTests } from "../src/version-vector";
 
 describe("performance regressions", () => {
   it("memoizes structural fingerprints for repeated nested nodes", () => {
@@ -613,17 +617,6 @@ describe("performance regressions", () => {
   });
 
   it("avoids rescanning merged documents to recover mergeState actor counters", async () => {
-    const versionVectorModule = await import("../src/version-vector");
-    const observedVersionVector = mock(versionVectorModule.observedVersionVector);
-
-    void mock.module("../src/version-vector", () => ({
-      ...versionVectorModule,
-      observedVersionVector,
-    }));
-
-    const { applyPatch, cloneDoc, createClock, createState, forkState, mergeState, toJson } =
-      await import("../src/internals");
-
     const base = createState(
       {
         profile: {
@@ -642,8 +635,18 @@ describe("performance regressions", () => {
       clock: createClock("A", 3),
     };
     const peerB = applyPatch(forkState(base, "B"), [{ op: "add", path: "/team", value: "core" }]);
+    let observedVersionVectorCalls = 0;
 
-    const merged = mergeState(staleA, peerB, { actor: "A" });
+    setObservedVersionVectorObserverForTests(() => {
+      observedVersionVectorCalls += 1;
+    });
+
+    let merged;
+    try {
+      merged = mergeState(staleA, peerB, { actor: "A" });
+    } finally {
+      setObservedVersionVectorObserverForTests(null);
+    }
 
     expect(toJson(merged)).toEqual({
       profile: {
@@ -654,6 +657,6 @@ describe("performance regressions", () => {
       team: "core",
     });
     expect(merged.clock.ctr).toBe(advancedA.clock.ctr);
-    expect(observedVersionVector).not.toHaveBeenCalled();
+    expect(observedVersionVectorCalls).toBe(0);
   });
 });
