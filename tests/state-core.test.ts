@@ -1326,6 +1326,30 @@ describe("materialize", () => {
     expect(materialize(doc.root)).toEqual(value);
   });
 
+  it("assigns unique object dots with docFromJson and reuses dots with the legacy helper", () => {
+    const value: JsonValue = { left: { nested: 1 }, right: { nested: 2 } };
+    const generated = docFromJson(value, newDotGen("A", 0));
+    const legacy = docFromJsonWithDot(value, dot("A", 1));
+
+    if (generated.root.kind !== "obj" || legacy.root.kind !== "obj") {
+      throw new Error("Expected object roots");
+    }
+
+    const generatedLeft = generated.root.entries.get("left");
+    const generatedRight = generated.root.entries.get("right");
+    const legacyLeft = legacy.root.entries.get("left");
+    const legacyRight = legacy.root.entries.get("right");
+
+    expect(generatedLeft).toBeDefined();
+    expect(generatedRight).toBeDefined();
+    expect(legacyLeft).toBeDefined();
+    expect(legacyRight).toBeDefined();
+
+    expect(generatedLeft?.dot).not.toEqual(generatedRight?.dot);
+    expect(legacyLeft?.dot).toEqual(dot("A", 1));
+    expect(legacyRight?.dot).toEqual(dot("A", 1));
+  });
+
   it("materializes deeply nested object nodes", () => {
     const depth = 8_000;
     const root = makeDeepObjectNode(depth, "leaf");

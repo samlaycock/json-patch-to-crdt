@@ -245,6 +245,11 @@ Advanced/internal helpers are available from:
 import { crdtToJsonPatch, applyPatchAsActor } from "json-patch-to-crdt/internals";
 ```
 
+`docFromJsonWithDot(...)` remains available on `./internals` as a deprecated legacy
+fixture helper. It reuses a single seed dot across object nodes and synthesizes
+array child counters from that seed, so production code should prefer
+`docFromJson(value, nextDot)`.
+
 ## Notes
 
 - Arrays use a CRDT sequence internally; concurrent inserts are preserved.

@@ -52,8 +52,15 @@ export function docFromJson(value: JsonValue, nextDot: () => Dot): Doc {
 }
 
 /**
- * Legacy: create a doc using a single dot with counter offsets for array children.
- * Prefer `docFromJson(value, nextDot)` to ensure unique dots per node.
+ * Legacy helper for tests and fixtures that seeds an entire document from one dot.
+ *
+ * It reuses that dot for object entries and synthesizes array child counters from the
+ * same seed, which can produce low-quality causal metadata and unrealistic sequence
+ * identities in production CRDT state.
+ *
+ * Prefer `docFromJson(value, nextDot)` so every node receives a fresh unique dot.
+ *
+ * @deprecated Use `docFromJson(value, nextDot)` for production documents.
  */
 export function docFromJsonWithDot(value: JsonValue, dot: Dot): Doc {
   return { root: deepNodeFromJson(value, dot) };
