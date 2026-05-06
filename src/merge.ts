@@ -136,7 +136,7 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
  * The merged clock keeps a stable actor identity:
  * - defaults to the actor from the first argument (`a`)
  * - can be overridden via `options.actor`
- * - optional `options.requireSharedOrigin` controls merge lineage checks
+ * - optional `options.unrelatedArrays` controls the merge strategy for non-overlapping sequences
  *
  * The merged counter is lifted to the highest counter already observed for
  * that actor across both input clocks and the merged document dots.
