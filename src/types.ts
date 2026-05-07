@@ -342,8 +342,10 @@ export type ApplyPatchOptions = {
   resourceBudget?: ResourceBudget;
   /**
    * Reject array inserts when the base parent path is missing.
-   * Defaults to `false` to preserve legacy behavior that can auto-create
-   * missing arrays for index `0` / append intents.
+   * Defaults to `true` for RFC 6902-compatible parent semantics.
+   * Use `withStrictRfc6902Parents(...)` for RFC 6902-compatible missing-parent
+   * behavior. Explicitly setting `false` preserves the legacy behavior that can
+   * auto-create missing arrays for index `0` / append intents.
    */
   strictParents?: boolean;
   /**

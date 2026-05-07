@@ -72,6 +72,9 @@ import {
   vvHasDot,
   vvMerge,
   JsonValueValidationError,
+  strictRfc6902PatchOptions,
+  withLegacyMissingArrayParents,
+  withStrictRfc6902Parents,
   type Dot,
   type SerializedDoc,
   type IntentOp,
@@ -597,6 +600,58 @@ describe("clock and state", () => {
     if (!result.ok) {
       expect(result.error.reason).toBe("INVALID_TARGET");
       expect(result.error.path).toBe("/a");
+    }
+  });
+
+  it("exposes a strict RFC 6902 parent profile for missing array inserts", () => {
+    const base = createState({}, { actor: "A" });
+    const head = applyPatch(base, [{ op: "add", path: "/list", value: [] }]);
+
+    const result = tryApplyPatch(
+      head,
+      [{ op: "add", path: "/list/0", value: "x" }],
+      withStrictRfc6902Parents({ base }),
+    );
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("MISSING_PARENT");
+      expect(result.error.path).toBe("/list");
+    }
+  });
+
+  it("keeps missing array parent auto-creation behind explicit legacy intent options", () => {
+    const baseDoc = docFromJsonWithDot({}, dot("A", 0));
+    const headDoc = cloneDoc(baseDoc);
+
+    const result = applyIntentsToCrdt(
+      baseDoc,
+      headDoc,
+      [{ t: "ArrInsert", path: ["list"], index: Number.POSITIVE_INFINITY, value: "legacy" }],
+      newDotGen("A", 1),
+      "head",
+      undefined,
+      withLegacyMissingArrayParents(),
+    );
+
+    expect(result.ok).toBeTrue();
+    if (result.ok) {
+      expect(materialize(headDoc.root)).toEqual({ list: ["legacy"] });
+    }
+  });
+
+  it("allows strict RFC 6902 options to be spread into applyPatch options", () => {
+    const base = createState({}, { actor: "A" });
+    const head = applyPatch(base, [{ op: "add", path: "/list", value: [] }]);
+
+    const result = tryApplyPatch(head, [{ op: "add", path: "/list/0", value: "x" }], {
+      base,
+      ...strictRfc6902PatchOptions,
+    });
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("MISSING_PARENT");
     }
   });
 
