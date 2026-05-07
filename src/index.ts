@@ -35,7 +35,14 @@ export type {
   TryMergeStateResult,
   ValidatePatchResult,
 } from "./types";
-export type { SafeApplyPatchOptions, SafeCreateStateOptions, SafeDiffOptions } from "./safe";
+export type {
+  NormalizedApplyPatchOptions,
+  NormalizedCreateStateOptions,
+  NormalizedDiffOptions,
+  SafeApplyPatchOptions,
+  SafeCreateStateOptions,
+  SafeDiffOptions,
+} from "./safe";
 
 // State helpers (high-level)
 export {

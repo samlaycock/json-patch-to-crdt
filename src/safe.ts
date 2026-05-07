@@ -16,6 +16,12 @@ export interface SafeApplyPatchOptions extends Omit<ApplyPatchOptions, "jsonVali
 
 export interface SafeDiffOptions extends Omit<DiffOptions, "jsonValidation"> {}
 
+export interface NormalizedCreateStateOptions extends Omit<CreateStateOptions, "jsonValidation"> {}
+
+export interface NormalizedApplyPatchOptions extends Omit<ApplyPatchOptions, "jsonValidation"> {}
+
+export interface NormalizedDiffOptions extends Omit<DiffOptions, "jsonValidation"> {}
+
 /** Create a state with strict runtime JSON validation enabled by default. */
 export function createSafeState(initial: JsonValue, options: SafeCreateStateOptions): CrdtState {
   return createState(initial, { ...options, jsonValidation: "strict" });
@@ -42,7 +48,7 @@ export function diffSafeJsonPatch(
 /** Create a state with normalizing runtime JSON validation enabled by default. */
 export function createNormalizedState(
   initial: JsonValue,
-  options: SafeCreateStateOptions,
+  options: NormalizedCreateStateOptions,
 ): CrdtState {
   return createState(initial, { ...options, jsonValidation: "normalize" });
 }
@@ -51,7 +57,7 @@ export function createNormalizedState(
 export function applyNormalizedPatch(
   state: CrdtState,
   patch: JsonPatchOp[],
-  options: SafeApplyPatchOptions = {},
+  options: NormalizedApplyPatchOptions = {},
 ): CrdtState {
   return applyPatch(state, patch, { ...options, jsonValidation: "normalize" });
 }
@@ -60,7 +66,7 @@ export function applyNormalizedPatch(
 export function diffNormalizedJsonPatch(
   base: JsonValue,
   next: JsonValue,
-  options: SafeDiffOptions = {},
+  options: NormalizedDiffOptions = {},
 ): JsonPatchOp[] {
   return diffJsonPatch(base, next, { ...options, jsonValidation: "normalize" });
 }
