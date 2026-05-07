@@ -273,20 +273,27 @@ function findSeqLineageMismatch(
     if (frame.a.kind === "obj" && frame.b.kind === "obj") {
       const left = frame.a;
       const right = frame.b;
-      let sharedKeyCount = 0;
 
+      if (config.budgetMeter) {
+        let sharedKeyCount = 0;
+        for (const key of left.entries.keys()) {
+          if (right.entries.has(key)) {
+            sharedKeyCount += 1;
+          }
+        }
+
+        config.budgetMeter.count("objectEntries", sharedKeyCount, budgetPath);
+      }
+
+      const sharedKeysInOrder: string[] = [];
       for (const key of left.entries.keys()) {
         if (right.entries.has(key)) {
-          sharedKeyCount += 1;
+          sharedKeysInOrder.push(key);
         }
       }
 
-      config.budgetMeter?.count("objectEntries", sharedKeyCount, budgetPath);
-      for (const key of left.entries.keys()) {
-        if (!right.entries.has(key)) {
-          continue;
-        }
-
+      for (let i = sharedKeysInOrder.length - 1; i >= 0; i--) {
+        const key = sharedKeysInOrder[i]!;
         const nextA = left.entries.get(key)!.node;
         const nextB = right.entries.get(key)!.node;
         stack.push({
