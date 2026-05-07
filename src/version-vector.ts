@@ -3,6 +3,7 @@ import type { CrdtState, Doc, Dot, Node, VersionVector } from "./types";
 import { assertTraversalDepth } from "./depth";
 
 let observedVersionVectorObserverForTests: ((target: Doc | CrdtState) => void) | null = null;
+const observedVersionVectorCache = new WeakMap<Doc, VersionVector>();
 
 export function readVersionVectorCounter(vv: VersionVector, actor: string): number | undefined {
   if (!Object.prototype.hasOwnProperty.call(vv, actor)) {
@@ -28,6 +29,25 @@ export function observeVersionVectorDot(vv: VersionVector, dot: Dot): void {
   }
 }
 
+export function cloneVersionVector(vv: VersionVector): VersionVector {
+  return mergeVersionVectors(vv);
+}
+
+export function readCachedObservedVersionVector(doc: Doc): VersionVector | undefined {
+  const cached = observedVersionVectorCache.get(doc);
+  return cached ? cloneVersionVector(cached) : undefined;
+}
+
+export function writeCachedObservedVersionVector(doc: Doc, vv: VersionVector): void {
+  observedVersionVectorCache.set(doc, cloneVersionVector(vv));
+}
+
+export function observeDocVersionVectorDot(doc: Doc, dot: Dot): void {
+  const cached = observedVersionVectorCache.get(doc) ?? (Object.create(null) as VersionVector);
+  observeVersionVectorDot(cached, dot);
+  observedVersionVectorCache.set(doc, cached);
+}
+
 /**
  * Inspect a document or state and return the highest observed counter per actor.
  *
@@ -36,12 +56,17 @@ export function observeVersionVectorDot(vv: VersionVector, dot: Dot): void {
  * of the currently materialized document tree.
  */
 export function observedVersionVector(target: Doc | CrdtState): VersionVector {
-  observedVersionVectorObserverForTests?.(target);
   const doc = "doc" in target ? target.doc : target;
-  const vv = Object.create(null) as VersionVector;
+  const cached = readCachedObservedVersionVector(doc);
+  const vv = cached ?? (Object.create(null) as VersionVector);
   if ("clock" in target) {
     observeVersionVectorDot(vv, { actor: target.clock.actor, ctr: target.clock.ctr });
   }
+  if (cached) {
+    return vv;
+  }
+
+  observedVersionVectorObserverForTests?.(target);
   const stack: Array<{ node: Node; depth: number }> = [{ node: doc.root, depth: 0 }];
 
   while (stack.length > 0) {
@@ -74,6 +99,7 @@ export function observedVersionVector(target: Doc | CrdtState): VersionVector {
     }
   }
 
+  writeCachedObservedVersionVector(doc, vv);
   return vv;
 }
 

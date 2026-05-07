@@ -8,12 +8,15 @@ import {
   applyPatchInPlace,
   compactStateTombstones,
   createState,
+  deserializeState,
   diffJsonPatch,
   forkState,
   mergeState,
+  serializeState,
   toJson,
 } from "../src";
 import {
+  applyPatchAsActor,
   applyIntentsToCrdt,
   cloneDoc,
   compileJsonPatchToIntent,
@@ -698,6 +701,58 @@ describe("performance regressions", () => {
       team: "core",
     });
     expect(merged.clock.ctr).toBe(advancedA.clock.ctr);
+    expect(observedVersionVectorCalls).toBe(0);
+  });
+
+  it("avoids rescanning cloned documents to recover applyPatchAsActor counters", () => {
+    const base = createState({ list: ["a"], obj: { stale: true } }, { actor: "A" });
+    const deleted = applyPatch(base, [
+      { op: "remove", path: "/list/0" },
+      { op: "remove", path: "/obj/stale" },
+    ]);
+    const doc = cloneDoc(deleted.doc);
+    const staleVv = { A: 1 };
+    let observedVersionVectorCalls = 0;
+
+    setObservedVersionVectorObserverForTests(() => {
+      observedVersionVectorCalls += 1;
+    });
+
+    let next;
+    try {
+      next = applyPatchAsActor(doc, staleVv, "A", [{ op: "add", path: "/obj/fresh", value: true }]);
+    } finally {
+      setObservedVersionVectorObserverForTests(null);
+    }
+
+    expect(toJson(next.state)).toEqual({ list: [], obj: { fresh: true } });
+    expect(next.vv.A).toBeGreaterThan(deleted.clock.ctr);
+    expect(observedVersionVectorCalls).toBe(0);
+  });
+
+  it("avoids rescanning deserialized documents to repair stale clocks", () => {
+    const base = createState({ list: ["a"], obj: { stale: true } }, { actor: "A" });
+    const deleted = applyPatch(base, [
+      { op: "remove", path: "/list/0" },
+      { op: "remove", path: "/obj/stale" },
+    ]);
+    const payload = serializeState(deleted);
+    payload.clock.ctr = 0;
+    let observedVersionVectorCalls = 0;
+
+    setObservedVersionVectorObserverForTests(() => {
+      observedVersionVectorCalls += 1;
+    });
+
+    let restored;
+    try {
+      restored = deserializeState(payload);
+    } finally {
+      setObservedVersionVectorObserverForTests(null);
+    }
+
+    expect(restored.clock.ctr).toBe(deleted.clock.ctr);
+    expect(toJson(restored)).toEqual({ list: [], obj: {} });
     expect(observedVersionVectorCalls).toBe(0);
   });
 });

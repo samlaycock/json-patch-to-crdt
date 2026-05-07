@@ -13,6 +13,7 @@ import type {
   ObjNode,
   RgaElem,
   RgaSeq,
+  VersionVector,
 } from "./types";
 
 import { createBudgetMeter } from "./budget";
@@ -41,6 +42,12 @@ import {
   rgaPrevForInsertAtIndex,
 } from "./rga";
 import { ROOT_KEY } from "./types";
+import {
+  observeDocVersionVectorDot,
+  observeVersionVectorDot,
+  readCachedObservedVersionVector,
+  writeCachedObservedVersionVector,
+} from "./version-vector";
 
 /**
  * Create a CRDT document from a JSON value, using fresh dots for each node.
@@ -49,7 +56,15 @@ import { ROOT_KEY } from "./types";
  * @returns A new CRDT `Doc`.
  */
 export function docFromJson(value: JsonValue, nextDot: () => Dot): Doc {
-  return { root: nodeFromJson(value, nextDot) };
+  const vv = Object.create(null) as VersionVector;
+  const root = nodeFromJson(value, () => {
+    const dot = nextDot();
+    observeVersionVectorDot(vv, dot);
+    return dot;
+  });
+  const doc = { root };
+  writeCachedObservedVersionVector(doc, vv);
+  return doc;
 }
 
 /**
@@ -398,7 +413,12 @@ function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
 
 /** Deep-clone a CRDT document. The clone is fully independent of the original. */
 export function cloneDoc(doc: Doc): Doc {
-  return { root: cloneNode(doc.root) };
+  const cloned = { root: cloneNode(doc.root) };
+  const cached = readCachedObservedVersionVector(doc);
+  if (cached) {
+    writeCachedObservedVersionVector(cloned, cached);
+  }
+  return cloned;
 }
 
 function cloneNode(node: Node): Node {
@@ -938,42 +958,56 @@ export function applyIntentsToCrdt(
   options: { strictParents?: boolean } = {},
 ): ApplyResult {
   const arrayIndexSession = createArrayIndexLookupSession();
+  let pendingObservedDots: Dot[] = [];
+  const observedNewDot = () => {
+    const dot = newDot();
+    pendingObservedDots.push(dot);
+    return dot;
+  };
 
   for (const it of intents) {
     let fail: ApplyResult | null = null;
+    pendingObservedDots = [];
 
     switch (it.t) {
       case "Test":
         fail = applyTest(base, head, it, evalTestAgainst);
         break;
       case "ObjSet":
-        fail = applyObjSet(head, it, newDot);
+        fail = applyObjSet(head, it, observedNewDot);
         break;
       case "ObjRemove":
-        fail = applyObjRemove(head, it, newDot);
+        fail = applyObjRemove(head, it, observedNewDot);
         break;
       case "ArrInsert":
         fail = applyArrInsert(
           base,
           head,
           it,
-          newDot,
+          observedNewDot,
           arrayIndexSession,
           bumpCounterAbove,
           options.strictParents ?? true,
         );
         break;
       case "ArrDelete":
-        fail = applyArrDelete(base, head, it, newDot, arrayIndexSession);
+        fail = applyArrDelete(base, head, it, observedNewDot, arrayIndexSession);
         break;
       case "ArrReplace":
-        fail = applyArrReplace(base, head, it, newDot, arrayIndexSession);
+        fail = applyArrReplace(base, head, it, observedNewDot, arrayIndexSession);
         break;
       default:
         assertNever(it, "Unhandled intent type");
     }
 
-    if (fail) return fail;
+    if (fail) {
+      pendingObservedDots = [];
+      return fail;
+    }
+
+    for (const dot of pendingObservedDots) {
+      observeDocVersionVectorDot(head, dot);
+    }
   }
 
   return { ok: true };
