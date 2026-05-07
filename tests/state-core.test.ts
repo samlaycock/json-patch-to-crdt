@@ -194,6 +194,21 @@ describe("dots and version vectors", () => {
     expect(observedVersionVector(removed)).toEqual({ A: removed.clock.ctr });
   });
 
+  it("does not promote partial caches for legacy unseeded docs", () => {
+    const doc = docFromJsonWithDot({ a: 1 }, dot("B", 10));
+    let ctr = 0;
+    const result = applyIntentsToCrdt(
+      doc,
+      doc,
+      [{ t: "ObjSet", path: [], key: "b", value: 2 }],
+      () => dot("A", ++ctr),
+      "base",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(observedVersionVector(doc)).toEqual({ A: 2, B: 10 });
+  });
+
   it("supports public merge, intersection, and coverage checks for version vectors", () => {
     const left = JSON.parse('{"A":3,"B":1,"__proto__":4}') as VersionVector;
     const right: VersionVector = { A: 2, B: 5, C: 1 };

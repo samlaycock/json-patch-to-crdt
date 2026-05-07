@@ -43,9 +43,12 @@ export function writeCachedObservedVersionVector(doc: Doc, vv: VersionVector): v
 }
 
 export function observeDocVersionVectorDot(doc: Doc, dot: Dot): void {
-  const cached = observedVersionVectorCache.get(doc) ?? (Object.create(null) as VersionVector);
+  const cached = observedVersionVectorCache.get(doc);
+  if (!cached) {
+    return;
+  }
+
   observeVersionVectorDot(cached, dot);
-  observedVersionVectorCache.set(doc, cached);
 }
 
 /**
