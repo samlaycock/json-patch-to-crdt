@@ -231,20 +231,27 @@ function findSeqLineageMismatch(
   path: string[],
   config: MergeConfig,
 ): string | null {
-  const stack: Array<{ a: Node; b: Node; path: string[]; depth: number }> = [
-    { a, b, path, depth: path.length },
+  const pathBuffer = [...path];
+  const stack: Array<{ a: Node; b: Node; key?: string; depth: number }> = [
+    { a, b, depth: path.length },
   ];
 
   while (stack.length > 0) {
     const frame = stack.pop()!;
     assertTraversalDepth(frame.depth);
-    config.budgetMeter?.count("visitedNodes", 1, stringifyJsonPointer(frame.path));
+    pathBuffer.length = frame.depth;
+    if (frame.key !== undefined) {
+      pathBuffer[frame.depth - 1] = frame.key;
+    }
+
+    const budgetPath = config.budgetMeter ? stringifyJsonPointer(pathBuffer) : undefined;
+    config.budgetMeter?.count("visitedNodes", 1, budgetPath);
 
     if (frame.a.kind === "seq" && frame.b.kind === "seq") {
       config.budgetMeter?.count(
         "sequenceElements",
         frame.a.elems.size + frame.b.elems.size,
-        stringifyJsonPointer(frame.path),
+        budgetPath,
       );
       const hasElemsA = frame.a.elems.size > 0;
       const hasElemsB = frame.b.elems.size > 0;
@@ -258,7 +265,7 @@ function findSeqLineageMismatch(
         }
 
         if (!shared) {
-          return stringifyJsonPointer(frame.path);
+          return stringifyJsonPointer(pathBuffer);
         }
       }
     }
@@ -266,21 +273,27 @@ function findSeqLineageMismatch(
     if (frame.a.kind === "obj" && frame.b.kind === "obj") {
       const left = frame.a;
       const right = frame.b;
-      const sharedKeys = [...left.entries.keys()].filter((key) => right.entries.has(key));
-      config.budgetMeter?.count(
-        "objectEntries",
-        sharedKeys.length,
-        stringifyJsonPointer(frame.path),
-      );
-      for (let i = sharedKeys.length - 1; i >= 0; i--) {
-        const key = sharedKeys[i]!;
+      let sharedKeyCount = 0;
+
+      for (const key of left.entries.keys()) {
+        if (right.entries.has(key)) {
+          sharedKeyCount += 1;
+        }
+      }
+
+      config.budgetMeter?.count("objectEntries", sharedKeyCount, budgetPath);
+      for (const key of left.entries.keys()) {
+        if (!right.entries.has(key)) {
+          continue;
+        }
+
         const nextA = left.entries.get(key)!.node;
         const nextB = right.entries.get(key)!.node;
         stack.push({
           a: nextA,
           b: nextB,
-          path: [...frame.path, key],
           depth: frame.depth + 1,
+          key,
         });
       }
     }
@@ -443,7 +456,14 @@ function mergeObj(
     let merged: { node: Node; dot: Dot };
     let mergedNodeMaxObservedCtr = 0;
     if (ea && eb) {
-      const mergedNode = mergeNodeAtDepth(ea.node, eb.node, depth + 1, [...path, key], config);
+      path.push(key);
+      const mergedNode = (() => {
+        try {
+          return mergeNodeAtDepth(ea.node, eb.node, depth + 1, path, config);
+        } finally {
+          path.pop();
+        }
+      })();
       const dot = compareDot(ea.dot, eb.dot) >= 0 ? { ...ea.dot } : { ...eb.dot };
       merged = { node: mergedNode.node, dot };
       mergedNodeMaxObservedCtr = mergedNode.maxObservedCtr;
@@ -528,7 +548,14 @@ function mergeSeq(
       // - tombstone: true if either side tombstoned it
       // - value: recursively merge child nodes
       // - prev/insDot are validated to match before merge
-      const mergedValue = mergeNodeAtDepth(ea.value, eb.value, depth + 1, [...path, id], config);
+      path.push(id);
+      const mergedValue = (() => {
+        try {
+          return mergeNodeAtDepth(ea.value, eb.value, depth + 1, path, config);
+        } finally {
+          path.pop();
+        }
+      })();
       const mergedDeleteDot = mergeDeleteDot(ea.delDot, eb.delDot);
       elems.set(id, {
         id,
