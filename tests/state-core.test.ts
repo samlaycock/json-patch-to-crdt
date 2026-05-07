@@ -4,6 +4,8 @@ import { describe, expect, it } from "bun:test";
 import type { SerializedSyncRecord, SyncEnvelope, SyncJson, SyncRecord } from "./test-utils";
 
 import {
+  applyNormalizedPatch,
+  applySafePatch,
   intersectVersionVectors,
   mergeVersionVectors,
   observedVersionVector,
@@ -25,6 +27,8 @@ import {
   ClockValidationError,
   nextDotForActor,
   observeDot,
+  createNormalizedState,
+  createSafeState,
   createState,
   forkState,
   crdtToJsonPatch,
@@ -347,6 +351,34 @@ describe("clock and state", () => {
       arr: invalidArray.map(() => null),
     });
     expect(toJson(rootState)).toBeNull();
+  });
+
+  it("exposes strict safe state and patch helpers", () => {
+    expect(() =>
+      createSafeState({ n: Number.NaN } as unknown as JsonValue, { actor: "A" }),
+    ).toThrow(JsonValueValidationError);
+
+    const state = createSafeState({ ok: true }, { actor: "A" });
+    expect(() =>
+      applySafePatch(state, [
+        { op: "add", path: "/invalid", value: new Date("2020-01-01") as unknown as JsonValue },
+      ]),
+    ).toThrow(PatchError);
+  });
+
+  it("exposes normalizing state and patch helpers", () => {
+    const state = createNormalizedState(
+      {
+        keep: true,
+        nested: { when: new Date("2020-01-01") },
+      } as unknown as JsonValue,
+      { actor: "A" },
+    );
+    const next = applyNormalizedPatch(state, [
+      { op: "add", path: "/items", value: [Number.POSITIVE_INFINITY] as unknown as JsonValue },
+    ]);
+
+    expect(toJson(next)).toEqual({ keep: true, nested: {}, items: [null] });
   });
 
   it("handles deeply nested objects in createState and toJson", () => {
