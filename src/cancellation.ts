@@ -1,9 +1,4 @@
-import type { ApplyError, DeserializeFailure } from "./types";
-
-export interface AbortSignalLike {
-  readonly aborted: boolean;
-  readonly reason?: unknown;
-}
+import type { AbortSignalLike, ApplyError, DeserializeFailure } from "./types";
 
 export class OperationCancelledError extends Error {
   readonly reasonValue?: unknown;

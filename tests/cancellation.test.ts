@@ -2,14 +2,17 @@ import { describe, expect, it } from "bun:test";
 
 import {
   createState,
+  DeserializeError,
   deserializeState,
   diffJsonPatch,
   mergeState,
   OperationCancelledError,
   serializeState,
   tryApplyPatch,
+  tryApplyPatchInPlace,
   tryDeserializeState,
   tryMergeState,
+  toJson,
   type JsonValue,
 } from "../src/index";
 
@@ -23,6 +26,17 @@ function makeLargeObject(size: number): Record<string, JsonValue> {
     value[`key${index}`] = index;
   }
   return value;
+}
+
+function abortOnCheck(check: number, reason = "deadline exceeded"): AbortSignal {
+  let checks = 0;
+  return {
+    get aborted() {
+      checks += 1;
+      return checks >= check;
+    },
+    reason,
+  } as AbortSignal;
 }
 
 describe("operation cancellation", () => {
@@ -49,6 +63,32 @@ describe("operation cancellation", () => {
         message: "operation cancelled: request closed",
       },
     });
+  });
+
+  it("preserves partial in-place changes when non-atomic patching is cancelled", () => {
+    const state = createState({ count: 0, other: 0 }, { actor: "A" });
+    const result = tryApplyPatchInPlace(
+      state,
+      [
+        { op: "replace", path: "/count", value: 1 },
+        { op: "replace", path: "/other", value: 2 },
+      ],
+      {
+        atomic: false,
+        signal: abortOnCheck(3, "request closed"),
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        ok: false,
+        code: 409,
+        reason: "OPERATION_CANCELLED",
+        message: "operation cancelled: request closed",
+      },
+    });
+    expect(toJson(state)).toEqual({ count: 1, other: 0 });
   });
 
   it("returns a typed cancellation failure from merge", () => {
@@ -85,7 +125,7 @@ describe("operation cancellation", () => {
     const serialized = serializeState(state);
 
     expect(() => deserializeState(serialized, { signal: abortedSignal() })).toThrow(
-      "operation cancelled",
+      DeserializeError,
     );
   });
 });
