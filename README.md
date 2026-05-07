@@ -110,6 +110,19 @@ For array-heavy snapshots, `diffJsonPatch` and `crdtToJsonPatch` support:
 `emitMoves` and/or `emitCopies` to opt into deterministic RFC 6902 `move`/`copy`
 rewrites.
 
+## Cancellation
+
+Expensive high-level APIs accept an optional `signal` compatible with `AbortSignal`:
+`diffJsonPatch`, `applyPatch`, `applyPatchInPlace`, `tryApplyPatch`, `tryApplyPatchInPlace`,
+`mergeState`, `tryMergeState`, `deserializeState`, and `tryDeserializeState`.
+
+Cancellation is checked at safe points between traversal steps and array-diff loop iterations.
+Immutable APIs either return no result or leave the input state unchanged when cancelled. In-place
+patch application with `atomic: true` keeps the same all-or-nothing behavior; with `atomic: false`,
+operations already applied before cancellation remain applied. Non-throwing APIs return
+`reason: "OPERATION_CANCELLED"` and throwing APIs throw their usual domain error wrappers where
+applicable.
+
 ## Serialize / Restore State
 
 ```ts

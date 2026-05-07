@@ -27,6 +27,7 @@ import type {
 } from "./types";
 
 import { ResourceBudgetError, createBudgetMeter, toBudgetApplyError } from "./budget";
+import { OperationCancelledError, throwIfAborted, toCancellationApplyError } from "./cancellation";
 import { createClock, cloneClock } from "./clock";
 import { TraversalDepthError, toDepthApplyError } from "./depth";
 import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
@@ -176,21 +177,21 @@ export function tryApplyPatch(
   patch: JsonPatchOp[],
   options: ApplyPatchOptions = {},
 ): TryApplyPatchResult {
-  const nextState: CrdtState = {
-    doc: cloneDoc(state.doc),
-    clock: cloneClock(state.clock),
-  };
-
   try {
+    throwIfAborted(options.signal);
+    const nextState: CrdtState = {
+      doc: cloneDoc(state.doc),
+      clock: cloneClock(state.clock),
+    };
     const result = applyPatchInternal(nextState, patch, options, "batch");
     if (!result.ok) {
       return { ok: false, error: result };
     }
+
+    return { ok: true, state: nextState };
   } catch (error) {
     return { ok: false, error: toApplyError(error) };
   }
-
-  return { ok: true, state: nextState };
 }
 
 /** Non-throwing in-place patch application variant. */
@@ -299,6 +300,7 @@ function toApplyPatchOptionsForActor(options: ApplyPatchAsActorOptions): ApplyPa
     testAgainst: options.testAgainst,
     strictParents: options.strictParents,
     jsonValidation: options.jsonValidation,
+    signal: options.signal,
     base: options.base
       ? {
           doc: options.base,
@@ -314,6 +316,7 @@ function applyPatchInternal(
   options: ApplyPatchOptions,
   _execution: "batch" | "step",
 ): ApplyResult {
+  throwIfAborted(options.signal);
   const jsonValidation = options.jsonValidation ?? "none";
   const preparedPatch = preparePatchPayloadsSafe(patch, jsonValidation);
   if (!preparedPatch.ok) {
@@ -339,6 +342,7 @@ function applyPatchInternal(
     };
 
     for (const [opIndex, op] of runtimePatch.entries()) {
+      throwIfAborted(options.signal);
       const baseDoc = explicitBaseState ? explicitBaseState.doc : state.doc;
       const step = applyPatchOpSequential(
         state,
@@ -1054,6 +1058,10 @@ function mergePointerPaths(basePointer: string, nestedPointer: string): string {
 }
 
 function toApplyError(error: unknown): ApplyError {
+  if (error instanceof OperationCancelledError) {
+    return toCancellationApplyError(error);
+  }
+
   if (error instanceof ResourceBudgetError) {
     return toBudgetApplyError(error);
   }

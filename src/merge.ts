@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 import { ResourceBudgetError, createBudgetMeter, toBudgetApplyError } from "./budget";
+import { OperationCancelledError, throwIfAborted, toCancellationApplyError } from "./cancellation";
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot } from "./dot";
@@ -48,6 +49,7 @@ type MergeConfig = {
   actor?: ActorId;
   unrelatedArrays: UnrelatedArraysStrategy;
   budgetMeter?: ReturnType<typeof createBudgetMeter>;
+  signal?: MergeDocOptions["signal"];
 };
 
 /** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
@@ -101,6 +103,7 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
     const config: MergeConfig = {
       unrelatedArrays: resolveUnrelatedArraysStrategy(options),
       budgetMeter: createBudgetMeter(options.resourceBudget),
+      signal: options.signal,
     };
 
     if (config.unrelatedArrays === "reject") {
@@ -142,6 +145,10 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
       return { ok: false, error: toBudgetApplyError(error) };
     }
 
+    if (error instanceof OperationCancelledError) {
+      return { ok: false, error: toCancellationApplyError(error) };
+    }
+
     throw error;
   }
 }
@@ -178,6 +185,7 @@ export function tryMergeState(
       actor,
       unrelatedArrays: resolveUnrelatedArraysStrategy(options),
       budgetMeter: createBudgetMeter(options.resourceBudget),
+      signal: options.signal,
     };
 
     if (config.unrelatedArrays === "reject") {
@@ -221,6 +229,10 @@ export function tryMergeState(
       return { ok: false, error: toBudgetApplyError(error) };
     }
 
+    if (error instanceof OperationCancelledError) {
+      return { ok: false, error: toCancellationApplyError(error) };
+    }
+
     throw error;
   }
 }
@@ -237,6 +249,7 @@ function findSeqLineageMismatch(
   ];
 
   while (stack.length > 0) {
+    throwIfAborted(config.signal);
     const frame = stack.pop()!;
     assertTraversalDepth(frame.depth);
     pathBuffer.length = frame.depth;
@@ -341,11 +354,12 @@ function maxObservedCtrForActor(
   return best;
 }
 
-function repDot(node: Node): Dot {
+function repDot(node: Node, signal?: MergeDocOptions["signal"]): Dot {
   let best: Dot = { actor: "", ctr: 0 };
   const stack: Array<{ node: Node; depth: number }> = [{ node, depth: 0 }];
 
   while (stack.length > 0) {
+    throwIfAborted(signal);
     const frame = stack.pop()!;
     assertTraversalDepth(frame.depth);
 
@@ -395,6 +409,7 @@ function mergeNodeAtDepth(
   path: string[],
   config: MergeConfig,
 ): MergeNodeResult {
+  throwIfAborted(config.signal);
   assertTraversalDepth(depth);
   config.budgetMeter?.count("visitedNodes", 1, stringifyJsonPointer(path));
 
@@ -404,9 +419,9 @@ function mergeNodeAtDepth(
   if (a.kind === "seq" && b.kind === "seq") return mergeSeq(a, b, depth + 1, path, config);
 
   // Kind mismatch: higher representative dot wins entirely.
-  const cmp = compareDot(repDot(a), repDot(b));
-  if (cmp >= 0) return cloneNodeShallow(a, depth + 1, config.actor);
-  return cloneNodeShallow(b, depth + 1, config.actor);
+  const cmp = compareDot(repDot(a, config.signal), repDot(b, config.signal));
+  if (cmp >= 0) return cloneNodeShallow(a, depth + 1, config.actor, config.signal);
+  return cloneNodeShallow(b, depth + 1, config.actor, config.signal);
 }
 
 function mergeLww(a: LwwReg, b: LwwReg, actor?: ActorId): MergeNodeResult {
@@ -438,6 +453,7 @@ function mergeObj(
   const allTombKeys = new Set([...a.tombstone.keys(), ...b.tombstone.keys()]);
   config.budgetMeter?.count("objectEntries", allTombKeys.size, stringifyJsonPointer(path));
   for (const key of allTombKeys) {
+    throwIfAborted(config.signal);
     const da = a.tombstone.get(key);
     const db = b.tombstone.get(key);
     if (da && db) {
@@ -457,6 +473,7 @@ function mergeObj(
   const allKeys = new Set([...a.entries.keys(), ...b.entries.keys()]);
   config.budgetMeter?.count("objectEntries", allKeys.size, stringifyJsonPointer(path));
   for (const key of allKeys) {
+    throwIfAborted(config.signal);
     const ea = a.entries.get(key);
     const eb = b.entries.get(key);
 
@@ -475,11 +492,11 @@ function mergeObj(
       merged = { node: mergedNode.node, dot };
       mergedNodeMaxObservedCtr = mergedNode.maxObservedCtr;
     } else if (ea) {
-      const cloned = cloneNodeShallow(ea.node, depth + 1, config.actor);
+      const cloned = cloneNodeShallow(ea.node, depth + 1, config.actor, config.signal);
       merged = { node: cloned.node, dot: { ...ea.dot } };
       mergedNodeMaxObservedCtr = cloned.maxObservedCtr;
     } else {
-      const cloned = cloneNodeShallow(eb!.node, depth + 1, config.actor);
+      const cloned = cloneNodeShallow(eb!.node, depth + 1, config.actor, config.signal);
       merged = { node: cloned.node, dot: { ...eb!.dot } };
       mergedNodeMaxObservedCtr = cloned.maxObservedCtr;
     }
@@ -516,6 +533,7 @@ function mergeSeq(
   if (config.unrelatedArrays === "atomic-replace" && a.elems.size > 0 && b.elems.size > 0) {
     let shared = false;
     for (const id of a.elems.keys()) {
+      throwIfAborted(config.signal);
       if (b.elems.has(id)) {
         shared = true;
         break;
@@ -527,8 +545,8 @@ function mergeSeq(
         a.elems.size + b.elems.size,
         stringifyJsonPointer(path),
       );
-      const winner = compareDot(repDot(a), repDot(b)) >= 0 ? a : b;
-      return cloneNodeShallow(winner, depth, config.actor);
+      const winner = compareDot(repDot(a, config.signal), repDot(b, config.signal)) >= 0 ? a : b;
+      return cloneNodeShallow(winner, depth, config.actor, config.signal);
     }
   }
 
@@ -539,6 +557,7 @@ function mergeSeq(
   const allIds = new Set([...a.elems.keys(), ...b.elems.keys()]);
   config.budgetMeter?.count("sequenceElements", allIds.size, stringifyJsonPointer(path));
   for (const id of allIds) {
+    throwIfAborted(config.signal);
     const ea = a.elems.get(id);
     const eb = b.elems.get(id);
 
@@ -579,11 +598,11 @@ function mergeSeq(
         maxObservedCtrForDot(mergedDeleteDot, config.actor),
       );
     } else if (ea) {
-      const cloned = cloneElem(ea, depth + 1, config.actor);
+      const cloned = cloneElem(ea, depth + 1, config.actor, config.signal);
       elems.set(id, cloned.elem);
       maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
     } else {
-      const cloned = cloneElem(eb!, depth + 1, config.actor);
+      const cloned = cloneElem(eb!, depth + 1, config.actor, config.signal);
       elems.set(id, cloned.elem);
       maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
     }
@@ -600,9 +619,11 @@ function cloneElem(
   e: RgaElem,
   depth: number,
   actor?: ActorId,
+  signal?: MergeDocOptions["signal"],
 ): { elem: RgaElem; maxObservedCtr: number } {
+  throwIfAborted(signal);
   assertTraversalDepth(depth);
-  const value = cloneNodeShallow(e.value, depth + 1, actor);
+  const value = cloneNodeShallow(e.value, depth + 1, actor, signal);
   return {
     elem: {
       id: e.id,
@@ -636,7 +657,13 @@ function mergeDeleteDot(a?: Dot, b?: Dot): Dot | undefined {
   return undefined;
 }
 
-function cloneNodeShallow(node: Node, depth: number, actor?: ActorId): MergeNodeResult {
+function cloneNodeShallow(
+  node: Node,
+  depth: number,
+  actor?: ActorId,
+  signal?: MergeDocOptions["signal"],
+): MergeNodeResult {
+  throwIfAborted(signal);
   assertTraversalDepth(depth);
   switch (node.kind) {
     case "lww":
@@ -648,7 +675,8 @@ function cloneNodeShallow(node: Node, depth: number, actor?: ActorId): MergeNode
       const entries = new Map<string, { node: Node; dot: Dot }>();
       let maxObservedCtr = 0;
       for (const [k, v] of node.entries) {
-        const cloned = cloneNodeShallow(v.node, depth + 1, actor);
+        throwIfAborted(signal);
+        const cloned = cloneNodeShallow(v.node, depth + 1, actor, signal);
         entries.set(k, { node: cloned.node, dot: { ...v.dot } });
         maxObservedCtr = Math.max(
           maxObservedCtr,
@@ -658,6 +686,7 @@ function cloneNodeShallow(node: Node, depth: number, actor?: ActorId): MergeNode
       }
       const tombstone = new Map<string, Dot>();
       for (const [k, d] of node.tombstone) {
+        throwIfAborted(signal);
         tombstone.set(k, { ...d });
         maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(d, actor));
       }
@@ -667,7 +696,8 @@ function cloneNodeShallow(node: Node, depth: number, actor?: ActorId): MergeNode
       const elems = new Map<string, RgaElem>();
       let maxObservedCtr = 0;
       for (const [id, e] of node.elems) {
-        const cloned = cloneElem(e, depth + 1, actor);
+        throwIfAborted(signal);
+        const cloned = cloneElem(e, depth + 1, actor, signal);
         elems.set(id, cloned.elem);
         maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
       }
