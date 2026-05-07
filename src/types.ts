@@ -148,10 +148,7 @@ export interface LegacySerializedState {
 export type SerializedState = SerializedStateV1 | LegacySerializedState;
 
 /** Typed reasons for rejecting malformed serialized CRDT payloads. */
-export type DeserializeErrorReason =
-  | "INVALID_SERIALIZED_SHAPE"
-  | "INVALID_SERIALIZED_INVARIANT"
-  | "RESOURCE_BUDGET_EXCEEDED";
+export type DeserializeErrorReason = "INVALID_SERIALIZED_SHAPE" | "INVALID_SERIALIZED_INVARIANT";
 
 export type ResourceBudgetKind =
   | "patchOperations"
@@ -186,12 +183,10 @@ export type DeserializeFailure =
   | {
       code: 409;
       reason: DeserializeErrorReason;
-      path?: string;
+      path: string;
       message: string;
-      budget?: ResourceBudgetKind;
-      limit?: number;
-      actual?: number;
     }
+  | ResourceBudgetExceededFailure
   | {
       code: 409;
       reason: "MAX_DEPTH_EXCEEDED";

@@ -487,11 +487,6 @@ function mergeSeq(
   // Atomic-replace: when both seqs are non-empty and share no element IDs,
   // the one with the higher representative dot wins entirely.
   if (config.unrelatedArrays === "atomic-replace" && a.elems.size > 0 && b.elems.size > 0) {
-    config.budgetMeter?.count(
-      "sequenceElements",
-      a.elems.size + b.elems.size,
-      stringifyJsonPointer(path),
-    );
     let shared = false;
     for (const id of a.elems.keys()) {
       if (b.elems.has(id)) {
@@ -500,6 +495,11 @@ function mergeSeq(
       }
     }
     if (!shared) {
+      config.budgetMeter?.count(
+        "sequenceElements",
+        a.elems.size + b.elems.size,
+        stringifyJsonPointer(path),
+      );
       const winner = compareDot(repDot(a), repDot(b)) >= 0 ? a : b;
       return cloneNodeShallow(winner, depth, config.actor);
     }

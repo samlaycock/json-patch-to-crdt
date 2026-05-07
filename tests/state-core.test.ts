@@ -1039,6 +1039,20 @@ describe("resource budgets", () => {
     throw new Error("Expected diff budget rejection");
   });
 
+  it("preserves LCS fallback when array diff cells exceed the budget but LCS is skipped", () => {
+    const base = { list: [0, 1, 2, 3, 4, 5] };
+    const next = { list: [5, 4, 3, 2, 1, 0] };
+
+    expect(
+      diffJsonPatch(base, next, {
+        lcsMaxCells: 10,
+        resourceBudget: {
+          arrayDiffCells: 1,
+        },
+      }),
+    ).toEqual([{ op: "replace", path: "/list", value: next.list }]);
+  });
+
   it("rejects merges that exceed the configured sequence element budget", () => {
     const left = createState({ list: [1, 2] }, { actor: "A" });
     const right = createState({ list: [3] }, { actor: "B" });
@@ -1058,6 +1072,26 @@ describe("resource budgets", () => {
     expect(result.error.budget).toBe("sequenceElements");
     expect(result.error.limit).toBe(2);
     expect(result.error.actual).toBe(3);
+  });
+
+  it("does not double-count shared sequence elements during atomic-replace fallthrough", () => {
+    const base = createState({ list: [1, 2] }, { actor: "A" });
+    const left = applyPatch(base, [{ op: "replace", path: "/list/0", value: 10 }]);
+    const right = applyPatch(base, [{ op: "replace", path: "/list/1", value: 20 }]);
+
+    const result = tryMergeState(left, right, {
+      unrelatedArrays: "atomic-replace",
+      resourceBudget: {
+        sequenceElements: 3,
+      },
+    });
+
+    expect(result.ok).toBeTrue();
+    if (!result.ok) {
+      throw new Error(`Expected merge success, received ${result.error.message}`);
+    }
+
+    expect(toJson(result.state)).toEqual({ list: [10, 20] });
   });
 
   it("rejects serialized payloads that exceed the configured element inspection budget", () => {
