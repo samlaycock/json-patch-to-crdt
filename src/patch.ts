@@ -661,11 +661,12 @@ function diffArrayWithLcsMatrix(
   const n = window.unmatchedBaseLength;
   const m = window.unmatchedNextLength;
   budgetMeter?.count("sequenceElements", n + m, stringifyJsonPointer(path));
-  budgetMeter?.count("arrayDiffCells", (n + 1) * (m + 1), stringifyJsonPointer(path));
 
   if (!shouldUseLcsDiff(n, m, options.lcsMaxCells)) {
     return false;
   }
+
+  budgetMeter?.count("arrayDiffCells", (n + 1) * (m + 1), stringifyJsonPointer(path));
 
   if (n === 0 && m === 0) {
     return true;
@@ -699,14 +700,14 @@ function diffArrayWithLinearLcs(
     window.unmatchedBaseLength + window.unmatchedNextLength,
     stringifyJsonPointer(path),
   );
+  if (!shouldUseLinearLcsDiff(window.unmatchedBaseLength, window.unmatchedNextLength, options)) {
+    return false;
+  }
   budgetMeter?.count(
     "arrayDiffCells",
     (window.unmatchedBaseLength + 1) * (window.unmatchedNextLength + 1),
     stringifyJsonPointer(path),
   );
-  if (!shouldUseLinearLcsDiff(window.unmatchedBaseLength, window.unmatchedNextLength, options)) {
-    return false;
-  }
 
   const steps: ArrayDiffStep[] = [];
   buildArrayEditScriptLinearSpace(
