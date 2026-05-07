@@ -567,15 +567,29 @@ describe("diffJsonPatch", () => {
     expect(ops).toEqual([{ op: "replace", path: "/arr/1250", value: -1 }]);
   });
 
+  it("uses a default guardrail for large unmatched windows with linear-space LCS", () => {
+    const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
+    const nextArr = [...baseArr.slice(1), baseArr[0]!];
+
+    const base: JsonValue = { arr: baseArr };
+    const next: JsonValue = { arr: nextArr };
+    const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+
+    expect(ops).toEqual([{ op: "replace", path: "/arr", value: nextArr }]);
+  });
+
   it(
-    "avoids atomic fallback for large unmatched windows with linear-space LCS",
+    "supports opting out of the default linear-space LCS guardrail",
     () => {
       const baseArr = Array.from({ length: 4_000 }, (_, idx) => idx);
       const nextArr = [...baseArr.slice(1), baseArr[0]!];
 
       const base: JsonValue = { arr: baseArr };
       const next: JsonValue = { arr: nextArr };
-      const ops = diffJsonPatch(base, next, { arrayStrategy: "lcs-linear" });
+      const ops = diffJsonPatch(base, next, {
+        arrayStrategy: "lcs-linear",
+        lcsLinearMaxCells: Number.POSITIVE_INFINITY,
+      });
 
       expect(ops).toEqual([
         { op: "remove", path: "/arr/0" },
