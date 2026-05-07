@@ -14,6 +14,7 @@ import type {
   SerializedState,
   TryDeserializeDocResult,
   TryDeserializeStateResult,
+  VersionVector,
 } from "./types";
 
 import {
@@ -25,7 +26,11 @@ import {
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth } from "./depth";
 import { dotToElemId } from "./dot";
-import { observedVersionVector } from "./version-vector";
+import {
+  observeVersionVectorDot,
+  readCachedObservedVersionVector,
+  writeCachedObservedVersionVector,
+} from "./version-vector";
 
 const HEAD_ELEM_ID = "HEAD";
 const SERIALIZED_DOC_VERSION = 1 as const;
@@ -78,7 +83,10 @@ function deserializeDocInternal(data: SerializedDoc, budgetMeter?: ResourceBudge
     fail("INVALID_SERIALIZED_SHAPE", "/root", "serialized doc is missing root");
   }
 
-  return { root: deserializeNode(raw.root, "/root", 0, budgetMeter) };
+  const observed = Object.create(null) as VersionVector;
+  const doc = { root: deserializeNode(raw.root, "/root", 0, budgetMeter, observed) };
+  writeCachedObservedVersionVector(doc, observed);
+  return doc;
 }
 
 /** Non-throwing `deserializeDoc` variant with typed validation details. */
@@ -132,7 +140,7 @@ export function deserializeState(
   const actor = readActor(clockRaw.actor, "/clock/actor");
   const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
   const doc = deserializeDocInternal(raw.doc as SerializedDoc, budgetMeter);
-  const observedCtr = observedVersionVector(doc)[actor] ?? 0;
+  const observedCtr = readCachedObservedVersionVector(doc)?.[actor] ?? 0;
   const clock = createClock(actor, Math.max(ctr, observedCtr));
   return { doc, clock };
 }
@@ -216,6 +224,7 @@ function deserializeNode(
   path: string,
   depth: number,
   budgetMeter?: ResourceBudgetMeter,
+  observed?: VersionVector,
 ): Node {
   assertTraversalDepth(depth);
   budgetMeter?.count("visitedNodes", 1, path);
@@ -230,10 +239,15 @@ function deserializeNode(
       fail("INVALID_SERIALIZED_SHAPE", `${path}/dot`, "lww node is missing dot");
     }
 
+    const dot = readDot(raw.dot, `${path}/dot`);
+    if (observed) {
+      observeVersionVectorDot(observed, dot);
+    }
+
     return {
       kind: "lww",
       value: structuredClone(readJsonValue(raw.value, `${path}/value`, depth + 1, budgetMeter)),
-      dot: readDot(raw.dot, `${path}/dot`),
+      dot,
     };
   }
 
@@ -247,15 +261,23 @@ function deserializeNode(
     for (const [k, v] of Object.entries(entriesRaw)) {
       const entryPath = `${path}/entries/${k}`;
       const entryRaw = asRecord(v, entryPath);
+      const dot = readDot(entryRaw.dot, `${entryPath}/dot`);
+      if (observed) {
+        observeVersionVectorDot(observed, dot);
+      }
       entries.set(k, {
-        node: deserializeNode(entryRaw.node, `${entryPath}/node`, depth + 1, budgetMeter),
-        dot: readDot(entryRaw.dot, `${entryPath}/dot`),
+        node: deserializeNode(entryRaw.node, `${entryPath}/node`, depth + 1, budgetMeter, observed),
+        dot,
       });
     }
 
     const tombstone = new Map<string, Dot>();
     for (const [k, d] of Object.entries(tombstoneRaw)) {
-      tombstone.set(k, readDot(d, `${path}/tombstone/${k}`));
+      const dot = readDot(d, `${path}/tombstone/${k}`);
+      if (observed) {
+        observeVersionVectorDot(observed, dot);
+      }
+      tombstone.set(k, dot);
     }
 
     return { kind: "obj", entries, tombstone };
@@ -283,12 +305,24 @@ function deserializeNode(
 
     const prev = readString(elem.prev, `${elemPath}/prev`);
     const tombstone = readBoolean(elem.tombstone, `${elemPath}/tombstone`);
-    const value = deserializeNode(elem.value, `${elemPath}/value`, depth + 1, budgetMeter);
+    const value = deserializeNode(
+      elem.value,
+      `${elemPath}/value`,
+      depth + 1,
+      budgetMeter,
+      observed,
+    );
     const insDot = readDot(elem.insDot, `${elemPath}/insDot`);
     const delDot =
       "delDot" in elem && elem.delDot !== undefined
         ? readDot(elem.delDot, `${elemPath}/delDot`)
         : undefined;
+    if (observed) {
+      observeVersionVectorDot(observed, insDot);
+      if (delDot) {
+        observeVersionVectorDot(observed, delDot);
+      }
+    }
     if (dotToElemId(insDot) !== id) {
       fail(
         "INVALID_SERIALIZED_INVARIANT",
