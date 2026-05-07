@@ -23,6 +23,11 @@ import {
   createBudgetMeter,
   toBudgetDeserializeFailure,
 } from "./budget";
+import {
+  OperationCancelledError,
+  throwIfAborted,
+  toCancellationDeserializeFailure,
+} from "./cancellation";
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth } from "./depth";
 import { dotToElemId } from "./dot";
@@ -73,10 +78,15 @@ export function serializeDoc(doc: Doc): SerializedDoc {
 /** Reconstruct a CRDT document from its serialized form. */
 export function deserializeDoc(data: SerializedDoc, options: DeserializeOptions = {}): Doc {
   const budgetMeter = createBudgetMeter(options.resourceBudget);
-  return deserializeDocInternal(data, budgetMeter);
+  return deserializeDocInternal(data, budgetMeter, options.signal);
 }
 
-function deserializeDocInternal(data: SerializedDoc, budgetMeter?: ResourceBudgetMeter): Doc {
+function deserializeDocInternal(
+  data: SerializedDoc,
+  budgetMeter?: ResourceBudgetMeter,
+  signal?: DeserializeOptions["signal"],
+): Doc {
+  throwIfAborted(signal);
   const raw = readSerializedDocEnvelope(data);
 
   if (!("root" in raw)) {
@@ -84,7 +94,7 @@ function deserializeDocInternal(data: SerializedDoc, budgetMeter?: ResourceBudge
   }
 
   const observed = Object.create(null) as VersionVector;
-  const doc = { root: deserializeNode(raw.root, "/root", 0, budgetMeter, observed) };
+  const doc = { root: deserializeNode(raw.root, "/root", 0, budgetMeter, observed, signal) };
   writeCachedObservedVersionVector(doc, observed);
   return doc;
 }
@@ -127,6 +137,7 @@ export function deserializeState(
 ): CrdtState {
   const raw = readSerializedStateEnvelope(data);
   const budgetMeter = createBudgetMeter(options.resourceBudget);
+  throwIfAborted(options.signal);
 
   if (!("doc" in raw)) {
     fail("INVALID_SERIALIZED_SHAPE", "/doc", "serialized state is missing doc");
@@ -139,7 +150,7 @@ export function deserializeState(
   const clockRaw = asRecord(raw.clock, "/clock");
   const actor = readActor(clockRaw.actor, "/clock/actor");
   const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
-  const doc = deserializeDocInternal(raw.doc as SerializedDoc, budgetMeter);
+  const doc = deserializeDocInternal(raw.doc as SerializedDoc, budgetMeter, options.signal);
   const observedCtr = readCachedObservedVersionVector(doc)?.[actor] ?? 0;
   const clock = createClock(actor, Math.max(ctr, observedCtr));
   return { doc, clock };
@@ -225,7 +236,9 @@ function deserializeNode(
   depth: number,
   budgetMeter?: ResourceBudgetMeter,
   observed?: VersionVector,
+  signal?: DeserializeOptions["signal"],
 ): Node {
+  throwIfAborted(signal);
   assertTraversalDepth(depth);
   budgetMeter?.count("visitedNodes", 1, path);
   const raw = asRecord(node, path);
@@ -246,7 +259,9 @@ function deserializeNode(
 
     return {
       kind: "lww",
-      value: structuredClone(readJsonValue(raw.value, `${path}/value`, depth + 1, budgetMeter)),
+      value: structuredClone(
+        readJsonValue(raw.value, `${path}/value`, depth + 1, budgetMeter, signal),
+      ),
       dot,
     };
   }
@@ -261,6 +276,7 @@ function deserializeNode(
 
     const entries = new Map<string, { node: Node; dot: Dot }>();
     for (const [k, v] of Object.entries(entriesRaw)) {
+      throwIfAborted(signal);
       const entryPath = `${path}/entries/${k}`;
       const entryRaw = asRecord(v, entryPath);
       const dot = readDot(entryRaw.dot, `${entryPath}/dot`);
@@ -268,13 +284,21 @@ function deserializeNode(
         observeVersionVectorDot(observed, dot);
       }
       entries.set(k, {
-        node: deserializeNode(entryRaw.node, `${entryPath}/node`, depth + 1, budgetMeter, observed),
+        node: deserializeNode(
+          entryRaw.node,
+          `${entryPath}/node`,
+          depth + 1,
+          budgetMeter,
+          observed,
+          signal,
+        ),
         dot,
       });
     }
 
     const tombstone = new Map<string, Dot>();
     for (const [k, d] of Object.entries(tombstoneRaw)) {
+      throwIfAborted(signal);
       const dot = readDot(d, `${path}/tombstone/${k}`);
       if (observed) {
         observeVersionVectorDot(observed, dot);
@@ -294,6 +318,7 @@ function deserializeNode(
   budgetMeter?.count("serializedElements", Object.keys(elemsRaw).length, `${path}/elems`);
   const elems = new Map<string, RgaElem>();
   for (const [id, rawElem] of Object.entries(elemsRaw)) {
+    throwIfAborted(signal);
     const elemPath = `${path}/elems/${id}`;
     const elem = asRecord(rawElem, elemPath);
     const elemId = readString(elem.id, `${elemPath}/id`);
@@ -313,6 +338,7 @@ function deserializeNode(
       depth + 1,
       budgetMeter,
       observed,
+      signal,
     );
     const insDot = readDot(elem.insDot, `${elemPath}/insDot`);
     const delDot =
@@ -351,6 +377,7 @@ function deserializeNode(
   }
 
   for (const elem of elems.values()) {
+    throwIfAborted(signal);
     if (elem.prev === elem.id) {
       fail(
         "INVALID_SERIALIZED_INVARIANT",
@@ -493,8 +520,9 @@ function readJsonValue(
   path: string,
   depth: number,
   budgetMeter?: ResourceBudgetMeter,
+  signal?: DeserializeOptions["signal"],
 ): JsonValue {
-  assertJsonValue(value, path, depth, budgetMeter);
+  assertJsonValue(value, path, depth, budgetMeter, signal);
   return value;
 }
 
@@ -503,7 +531,9 @@ function assertJsonValue(
   path: string,
   depth: number,
   budgetMeter?: ResourceBudgetMeter,
+  signal?: DeserializeOptions["signal"],
 ): asserts value is JsonValue {
+  throwIfAborted(signal);
   assertTraversalDepth(depth);
   budgetMeter?.count("visitedNodes", 1, path);
 
@@ -523,7 +553,8 @@ function assertJsonValue(
     budgetMeter?.count("sequenceElements", value.length, path);
     budgetMeter?.count("serializedElements", value.length, path);
     for (const [index, item] of value.entries()) {
-      assertJsonValue(item, `${path}/${index}`, depth + 1, budgetMeter);
+      throwIfAborted(signal);
+      assertJsonValue(item, `${path}/${index}`, depth + 1, budgetMeter, signal);
     }
 
     return;
@@ -537,7 +568,8 @@ function assertJsonValue(
   budgetMeter?.count("objectEntries", entries.length, path);
   budgetMeter?.count("serializedElements", entries.length, path);
   for (const [key, child] of entries) {
-    assertJsonValue(child, `${path}/${key}`, depth + 1, budgetMeter);
+    throwIfAborted(signal);
+    assertJsonValue(child, `${path}/${key}`, depth + 1, budgetMeter, signal);
   }
 }
 
@@ -548,6 +580,10 @@ function fail(reason: DeserializeErrorReason, path: string, message: string): ne
 function toDeserializeFailure(error: unknown): DeserializeFailure | null {
   if (error instanceof ResourceBudgetError) {
     return toBudgetDeserializeFailure(error);
+  }
+
+  if (error instanceof OperationCancelledError) {
+    return toCancellationDeserializeFailure(error);
   }
 
   if (error instanceof DeserializeError || error instanceof TraversalDepthError) {

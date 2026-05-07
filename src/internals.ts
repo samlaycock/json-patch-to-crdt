@@ -59,6 +59,7 @@ export { serializeDoc, deserializeDoc, tryDeserializeDoc } from "./serialize";
 export type {
   ApplyPatchAsActorResult,
   ApplyPatchAsActorOptions,
+  AbortSignalLike,
   TryApplyPatchAsActorResult,
   ApplyResult,
   Clock,

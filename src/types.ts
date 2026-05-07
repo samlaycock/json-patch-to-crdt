@@ -148,7 +148,10 @@ export interface LegacySerializedState {
 export type SerializedState = SerializedStateV1 | LegacySerializedState;
 
 /** Typed reasons for rejecting malformed serialized CRDT payloads. */
-export type DeserializeErrorReason = "INVALID_SERIALIZED_SHAPE" | "INVALID_SERIALIZED_INVARIANT";
+export type DeserializeErrorReason =
+  | "INVALID_SERIALIZED_SHAPE"
+  | "INVALID_SERIALIZED_INVARIANT"
+  | "OPERATION_CANCELLED";
 
 export type ResourceBudgetKind =
   | "patchOperations"
@@ -187,6 +190,11 @@ export type DeserializeFailure =
       message: string;
     }
   | ResourceBudgetExceededFailure
+  | {
+      code: 409;
+      reason: "OPERATION_CANCELLED";
+      message: string;
+    }
   | {
       code: 409;
       reason: "MAX_DEPTH_EXCEEDED";
@@ -266,6 +274,7 @@ export type ApplyPatchAsActorOptions = {
   semantics?: PatchSemantics;
   strictParents?: boolean;
   jsonValidation?: JsonValidationMode;
+  signal?: AbortSignalLike;
 };
 
 /** Non-throwing result for internals-only `tryApplyPatchAsActor`. */
@@ -286,7 +295,14 @@ export type PatchErrorReason =
   | "DOT_GENERATION_EXHAUSTED"
   | "MAX_DEPTH_EXCEEDED"
   | "RESOURCE_BUDGET_EXCEEDED"
-  | "LINEAGE_MISMATCH";
+  | "LINEAGE_MISMATCH"
+  | "OPERATION_CANCELLED";
+
+/** Minimal structural signal accepted by cancellable APIs. Compatible with AbortSignal. */
+export interface AbortSignalLike {
+  readonly aborted: boolean;
+  readonly reason?: unknown;
+}
 
 /** Structured conflict payload used by non-throwing APIs. */
 export type ApplyError = {
@@ -353,6 +369,7 @@ export type ApplyPatchOptions = {
    * Defaults to `"none"` for backward compatibility.
    */
   jsonValidation?: JsonValidationMode;
+  signal?: AbortSignalLike;
 };
 
 /** Options for in-place patch application (`applyPatchInPlace` / `tryApplyPatchInPlace`). */
@@ -400,6 +417,7 @@ export type MergeStateOptions = {
    */
   requireSharedOrigin?: boolean;
   resourceBudget?: ResourceBudget;
+  signal?: AbortSignalLike;
 };
 
 /** Options for `mergeDoc`. */
@@ -417,10 +435,12 @@ export type MergeDocOptions = {
    */
   requireSharedOrigin?: boolean;
   resourceBudget?: ResourceBudget;
+  signal?: AbortSignalLike;
 };
 
 export interface DeserializeOptions {
   resourceBudget?: ResourceBudget;
+  signal?: AbortSignalLike;
 }
 
 /** Non-throwing result for `mergeDoc`. */
@@ -522,6 +542,7 @@ export type DiffOptions = {
    */
   jsonValidation?: JsonValidationMode;
   resourceBudget?: ResourceBudget;
+  signal?: AbortSignalLike;
 };
 
 /**

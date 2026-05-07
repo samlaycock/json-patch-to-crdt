@@ -3,6 +3,7 @@
 // Types
 export type {
   ActorId,
+  AbortSignalLike,
   ApplyError,
   ApplyPatchInPlaceOptions,
   ApplyPatchOptions,
@@ -60,6 +61,7 @@ export {
 export { JsonValueValidationError } from "./json-value";
 export { ClockValidationError } from "./clock";
 export { ResourceBudgetError } from "./budget";
+export { OperationCancelledError } from "./cancellation";
 
 // JSON helpers
 export { diffJsonPatch } from "./patch";
