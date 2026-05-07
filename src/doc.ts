@@ -687,7 +687,7 @@ function applyArrInsert(
   newDot: () => Dot,
   indexSession: ArrayIndexLookupSession,
   bumpCounterAbove?: (ctr: number) => void,
-  strictParents = false,
+  strictParents = true,
 ): ApplyResult | null {
   const pointer = `/${it.path.join("/")}`;
   const baseSeq = getSeqAtPath(base, it.path);
@@ -924,7 +924,8 @@ function applyArrReplace(
  * @param evalTestAgainst - Whether `test` ops are evaluated against `"head"` or `"base"`.
  * @param bumpCounterAbove - Optional hook that can fast-forward the underlying counter before inserts.
  * @param options - Optional behavior toggles.
- * @param options.strictParents - When `true`, reject array inserts whose base parent path is missing.
+ * @param options.strictParents - Reject array inserts whose base parent path is missing.
+ *   Defaults to `true`; pass `false` only for legacy missing-parent array auto-creation.
  * @returns `{ ok: true }` on success, or `{ ok: false, code: 409, message }` on conflict.
  */
 export function applyIntentsToCrdt(
@@ -959,7 +960,7 @@ export function applyIntentsToCrdt(
           newDot,
           arrayIndexSession,
           bumpCounterAbove,
-          options.strictParents ?? false,
+          options.strictParents ?? true,
         );
         break;
       case "ArrDelete":
@@ -1003,7 +1004,7 @@ export function jsonPatchToCrdt(
   newDot?: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
-  strictParents = false,
+  strictParents = true,
 ): ApplyResult {
   if (isJsonPatchToCrdtOptions(baseOrOptions)) {
     return jsonPatchToCrdtInternal(baseOrOptions);
@@ -1050,7 +1051,7 @@ export function jsonPatchToCrdtSafe(
   newDot?: () => Dot,
   evalTestAgainst: "head" | "base" = "head",
   bumpCounterAbove?: (ctr: number) => void,
-  strictParents = false,
+  strictParents = true,
 ): ApplyResult {
   try {
     if (isJsonPatchToCrdtOptions(baseOrOptions)) {

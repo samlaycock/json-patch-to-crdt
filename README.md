@@ -158,6 +158,29 @@ try {
 
 If you prefer non-throwing results, use `tryApplyPatch(...)` / `tryMergeState(...)`.
 
+## Strict Parent Semantics
+
+RFC 6902 requires the parent of an `add` target to already exist. For compatibility
+with older CRDT intent flows, missing array parents can still be materialized for
+`/path/0` and `/path/-` inserts when `strictParents` is explicitly disabled.
+
+Use the named strict profile for RFC 6902 boundaries:
+
+```ts
+import { applyPatch, createState, withStrictRfc6902Parents } from "json-patch-to-crdt";
+
+const base = createState({}, { actor: "A" });
+const head = applyPatch(base, [{ op: "add", path: "/items", value: [] }]);
+
+applyPatch(head, [{ op: "add", path: "/items/0", value: "x" }], withStrictRfc6902Parents({ base }));
+// throws PatchError: base array missing at /items
+```
+
+Callers that intentionally depend on the legacy auto-create behavior should opt
+in explicitly with `withLegacyMissingArrayParents(...)`. That compatibility
+profile is deprecated because accepting missing parents can hide invalid upstream
+patch generation.
+
 ## Version Vector Helpers
 
 `observedVersionVector(...)` lets you inspect the highest observed counter per

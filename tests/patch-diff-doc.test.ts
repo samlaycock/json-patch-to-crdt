@@ -1127,7 +1127,7 @@ describe("applyIntentsToCrdt", () => {
     expect(materialize(headDoc.root)).toEqual(["remote", "seed"]);
   });
 
-  it("auto-creates arrays on insert at index 0 or append when base is missing", () => {
+  it("auto-creates arrays only when legacy missing array parents are explicit", () => {
     const baseDoc = docFromJsonWithDot({}, dot("A", 0));
     const headDoc = cloneDoc(baseDoc);
 
@@ -1136,6 +1136,9 @@ describe("applyIntentsToCrdt", () => {
       headDoc,
       [{ t: "ArrInsert", path: ["list"], index: 0, value: "a" }],
       newDotGen("A", 1),
+      "head",
+      undefined,
+      { strictParents: false },
     );
     expect(res0).toEqual({ ok: true });
     expect(materialize(headDoc.root)).toEqual({ list: ["a"] });
@@ -1153,9 +1156,30 @@ describe("applyIntentsToCrdt", () => {
         },
       ],
       newDotGen("A", 1),
+      "head",
+      undefined,
+      { strictParents: false },
     );
     expect(resAppend).toEqual({ ok: true });
     expect(materialize(headDoc2.root)).toEqual({ list: ["b"] });
+  });
+
+  it("rejects missing base arrays for intent inserts by default", () => {
+    const baseDoc = docFromJsonWithDot({}, dot("A", 0));
+    const headDoc = cloneDoc(baseDoc);
+
+    const res = applyIntentsToCrdt(
+      baseDoc,
+      headDoc,
+      [{ t: "ArrInsert", path: ["list"], index: 0, value: "a" }],
+      newDotGen("A", 1),
+    );
+
+    expect(res.ok).toBeFalse();
+    if (!res.ok) {
+      expect(res.reason).toBe("MISSING_PARENT");
+    }
+    expect(materialize(headDoc.root)).toEqual({});
   });
 
   it("rejects missing base arrays for inserts in strictParents mode", () => {

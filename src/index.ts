@@ -56,6 +56,13 @@ export { ResourceBudgetError } from "./budget";
 // JSON helpers
 export { diffJsonPatch } from "./patch";
 
+// Compatibility profiles
+export {
+  strictRfc6902PatchOptions,
+  withStrictRfc6902Parents,
+  withLegacyMissingArrayParents,
+} from "./options";
+
 // Serialization
 export {
   DeserializeError,
