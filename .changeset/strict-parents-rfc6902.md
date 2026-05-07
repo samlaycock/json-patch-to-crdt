@@ -1,5 +1,5 @@
 ---
-"json-patch-to-crdt": minor
+"json-patch-to-crdt": major
 ---
 
 Add named strict and legacy parent-semantics profiles for RFC 6902 array inserts.
