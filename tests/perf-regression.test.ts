@@ -29,6 +29,18 @@ import { setMaterializeObserverForTests } from "../src/materialize";
 import { setObservedVersionVectorObserverForTests } from "../src/version-vector";
 
 describe("performance regressions", () => {
+  it("reports the first shared-key lineage mismatch after path-buffer traversal", () => {
+    const result = tryMergeDoc(
+      docFromJson({ first: [1], second: [2] }, () => ({ actor: "A", ctr: 1 })),
+      docFromJson({ first: [1], second: [2] }, () => ({ actor: "B", ctr: 1 })),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.path).toBe("/first");
+    }
+  });
+
   it("checks deep merge lineage without repeated path-array cloning", () => {
     const depth = 2_000;
     const leafKey = "a~b/c";
