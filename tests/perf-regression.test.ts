@@ -22,11 +22,40 @@ import {
   jsonPatchToCrdt,
   materialize,
   stableJsonValueKey,
+  stringifyJsonPointer,
+  tryMergeDoc,
 } from "../src/internals";
 import { setMaterializeObserverForTests } from "../src/materialize";
 import { setObservedVersionVectorObserverForTests } from "../src/version-vector";
 
 describe("performance regressions", () => {
+  it("checks deep merge lineage without repeated path-array cloning", () => {
+    const depth = 2_000;
+    const leafKey = "a~b/c";
+    let leftValue: JsonValue = { [leafKey]: [1] };
+    let rightValue: JsonValue = { [leafKey]: [1] };
+
+    for (let i = 0; i < depth; i++) {
+      leftValue = { child: leftValue };
+      rightValue = { child: rightValue };
+    }
+
+    const startedAt = performance.now();
+    const result = tryMergeDoc(
+      docFromJson(leftValue, () => ({ actor: "A", ctr: 1 })),
+      docFromJson(rightValue, () => ({ actor: "B", ctr: 1 })),
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.path).toBe(
+        stringifyJsonPointer([...Array.from({ length: depth }, () => "child"), leafKey]),
+      );
+    }
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
+
   it("memoizes structural fingerprints for repeated nested nodes", () => {
     const hits = { count: 0 };
     const leaf = {};
