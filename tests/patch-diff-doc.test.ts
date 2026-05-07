@@ -18,6 +18,8 @@ import {
   compareDot,
   compileJsonPatchToIntent,
   diffJsonPatch,
+  diffNormalizedJsonPatch,
+  diffSafeJsonPatch,
   createClock,
   nextDotForActor,
   observeDot,
@@ -294,6 +296,20 @@ describe("diffJsonPatch", () => {
       { n: null, arr: [null], keep: { x: 1 }, drop: undefined } as unknown as JsonValue,
       { jsonValidation: "normalize" },
     );
+
+    expect(ops).toEqual([]);
+  });
+
+  it("exposes strict safe diff helper", () => {
+    expect(() =>
+      diffSafeJsonPatch({ valid: true }, { n: Number.NaN } as unknown as JsonValue),
+    ).toThrow(JsonValueValidationError);
+  });
+
+  it("exposes normalizing diff helper", () => {
+    const ops = diffNormalizedJsonPatch({ nested: { keep: true } }, {
+      nested: { keep: true, when: new Date("2020-01-01") },
+    } as unknown as JsonValue);
 
     expect(ops).toEqual([]);
   });

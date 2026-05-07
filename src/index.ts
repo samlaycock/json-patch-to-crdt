@@ -35,6 +35,7 @@ export type {
   TryMergeStateResult,
   ValidatePatchResult,
 } from "./types";
+export type { SafeApplyPatchOptions, SafeCreateStateOptions, SafeDiffOptions } from "./safe";
 
 // State helpers (high-level)
 export {
@@ -55,6 +56,16 @@ export { ResourceBudgetError } from "./budget";
 
 // JSON helpers
 export { diffJsonPatch } from "./patch";
+
+// Safe-by-default JSON validation helpers
+export {
+  applyNormalizedPatch,
+  applySafePatch,
+  createNormalizedState,
+  createSafeState,
+  diffNormalizedJsonPatch,
+  diffSafeJsonPatch,
+} from "./safe";
 
 // Compatibility profiles
 export {

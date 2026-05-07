@@ -222,6 +222,7 @@ vector, it returns that vector unchanged.
 
 `createState`, `applyPatch`, `diffJsonPatch`, and `crdtToJsonPatch` accept a
 `jsonValidation` option for callers that may pass runtime values through `any`.
+The default remains `"none"` for backward compatibility with earlier releases.
 
 - `"none"` keeps the current behavior with no extra runtime validation.
 - `"strict"` rejects values that are not valid JSON, including non-finite
@@ -246,13 +247,39 @@ console.log(toJson(state));
 // { keep: true, nested: {}, arr: [null] }
 ```
 
+For new untrusted-input boundaries, prefer the safe convenience helpers instead
+of relying on every call site to remember `jsonValidation`.
+
+```ts
+import {
+  applySafePatch,
+  createNormalizedState,
+  createSafeState,
+  diffSafeJsonPatch,
+} from "json-patch-to-crdt";
+
+const strictState = createSafeState(inputFromApi, { actor: "A" });
+const strictNext = applySafePatch(strictState, patchFromApi);
+const strictDelta = diffSafeJsonPatch(previousSnapshot, nextSnapshot);
+
+const normalizedState = createNormalizedState(inputFromApi, { actor: "A" });
+```
+
+The `Safe` helpers use strict validation and reject invalid runtime values. The
+`Normalized` helpers use normalization and coerce invalid runtime values into
+JSON-safe output. Existing `createState`, `applyPatch`, and `diffJsonPatch`
+calls keep their current compatibility defaults unless you opt into a validation
+mode directly.
+
 ## API Overview
 
 Main exports most apps need:
 
 - `createState(initial, { actor })`
+- `createSafeState(initial, { actor })` / `createNormalizedState(initial, { actor })`
 - `forkState(origin, actor)`
 - `applyPatch(state, patch, options?)`
+- `applySafePatch(state, patch, options?)` / `applyNormalizedPatch(state, patch, options?)`
 - `tryApplyPatch(state, patch, options?)`
 - `mergeState(local, remote, { actor })`
 - `tryMergeState(local, remote, options?)`
@@ -263,6 +290,7 @@ Main exports most apps need:
 - `compactStateTombstones(state, { stable })`
 - `toJson(stateOrDoc)`
 - `diffJsonPatch(baseJson, nextJson, options?)`
+- `diffSafeJsonPatch(baseJson, nextJson, options?)` / `diffNormalizedJsonPatch(baseJson, nextJson, options?)`
 - `serializeState(state)` / `deserializeState(payload)`
 - `validateJsonPatch(baseJson, patch, options?)`
 
