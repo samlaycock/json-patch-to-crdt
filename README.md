@@ -140,6 +140,31 @@ Persisted snapshot compatibility:
 The same compatibility contract applies to the lower-level `serializeDoc(...)` and
 `deserializeDoc(...)` helpers exported from `json-patch-to-crdt/internals`.
 
+### Resource Budgets for Serialized Payloads
+
+When accepting serialized CRDT payloads from network clients, pass
+`resourceBudget` limits to `deserializeState(...)`, `deserializeDoc(...)`, or the
+non-throwing `tryDeserialize*` variants. These limits reject hostile shallow
+payloads before validation allocates large maps or walks excessive element sets.
+
+```ts
+const result = tryDeserializeState(payload, {
+  resourceBudget: {
+    objectEntries: 10_000,
+    sequenceElements: 50_000,
+    serializedElements: 100_000,
+    visitedNodes: 100_000,
+  },
+});
+```
+
+Tune these caps to your product limits. For network-exposed services, start with
+caps near the largest document you intend to accept and lower them where request
+size, latency, or memory limits are tighter. `objectEntries` covers object keys
+and tombstone maps, `sequenceElements` covers RGA sequence elements and JSON
+arrays, `serializedElements` caps the combined serialized breadth, and
+`visitedNodes` caps total decoded node/value traversal.
+
 ## Error Handling
 
 `applyPatch` throws `PatchError` when a patch cannot be applied.
