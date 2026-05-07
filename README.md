@@ -176,6 +176,10 @@ applyPatch(head, [{ op: "add", path: "/items/0", value: "x" }], withStrictRfc690
 // throws PatchError: base array missing at /items
 ```
 
+The error is based on the explicit `base` snapshot used for CRDT array index
+resolution. In this example, `base` predates `/items`; without `{ base }`, the
+current `head` state would be used as the base and the insert would succeed.
+
 Callers that intentionally depend on the legacy auto-create behavior should opt
 in explicitly with `withLegacyMissingArrayParents(...)`. That compatibility
 profile is deprecated because accepting missing parents can hide invalid upstream

@@ -11,9 +11,13 @@ export const strictRfc6902PatchOptions = {
  * Use this when patches come from an RFC 6902 boundary and missing array
  * parents should fail instead of being materialized.
  */
+export function withStrictRfc6902Parents(): typeof strictRfc6902PatchOptions;
 export function withStrictRfc6902Parents<T extends ApplyPatchOptions>(
-  options: T = {} as T,
-): T & typeof strictRfc6902PatchOptions {
+  options: T,
+): T & typeof strictRfc6902PatchOptions;
+export function withStrictRfc6902Parents<T extends ApplyPatchOptions>(
+  options?: T,
+): typeof strictRfc6902PatchOptions | (T & typeof strictRfc6902PatchOptions) {
   return {
     ...options,
     strictParents: true,
@@ -28,9 +32,13 @@ export function withStrictRfc6902Parents<T extends ApplyPatchOptions>(
  * flows that intentionally materialize missing arrays for `/path/0` or
  * `/path/-` inserts.
  */
+export function withLegacyMissingArrayParents(): { strictParents: false };
 export function withLegacyMissingArrayParents<T extends ApplyPatchOptions>(
-  options: T = {} as T,
-): T & { strictParents: false } {
+  options: T,
+): T & { strictParents: false };
+export function withLegacyMissingArrayParents<T extends ApplyPatchOptions>(
+  options?: T,
+): { strictParents: false } | (T & { strictParents: false }) {
   return {
     ...options,
     strictParents: false,
