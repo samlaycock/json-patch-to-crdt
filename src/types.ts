@@ -478,8 +478,8 @@ export type DiffOptions = {
    * Array diff mode.
    * - `"lcs"` (default): index-level edits using LCS.
    * - `"lcs-linear"`: index-level edits using a lower-memory LCS variant.
-   *   This reduces memory use but still has `O(n * m)` time complexity and no
-   *   automatic fallback for very large unmatched windows.
+   *   This reduces memory use but still has `O(n * m)` time complexity. Large
+   *   unmatched windows fall back to atomic replacement by default.
    * - `"atomic"`: one-op root/field replacement for changed arrays.
    */
   arrayStrategy?: "atomic" | "lcs" | "lcs-linear";
@@ -492,16 +492,16 @@ export type DiffOptions = {
    */
   lcsMaxCells?: number;
   /**
-   * Optional guardrail for `arrayStrategy: "lcs-linear"`.
+   * Guardrail for `arrayStrategy: "lcs-linear"`.
    * Uses the trimmed unmatched window size
    * (`(unmatchedBase.length + 1) * (unmatchedNext.length + 1)`) as a proxy for
    * worst-case work. When the cap is exceeded, the diff falls back to an atomic
    * array replacement instead of running the linear-space traversal.
    *
-   * Unlike `lcsMaxCells`, this is opt-in and defaults to no fallback so
-   * existing `lcs-linear` callers keep their current behavior.
+   * Defaults to `250_000`.
    *
-   * Set to `Number.POSITIVE_INFINITY` to always allow `lcs-linear`.
+   * Set to `Number.POSITIVE_INFINITY` to always allow `lcs-linear` and preserve
+   * the previous unbounded behavior.
    */
   lcsLinearMaxCells?: number;
   /**

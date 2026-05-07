@@ -104,7 +104,7 @@ For array-heavy snapshots, `diffJsonPatch` and `crdtToJsonPatch` support:
 
 `lcsMaxCells` only applies to `arrayStrategy: "lcs"`. If the classic LCS matrix for the trimmed unmatched window would exceed the configured cap, the diff falls back to an atomic array `replace`.
 
-`lcsLinearMaxCells` is the matching opt-in guardrail for `arrayStrategy: "lcs-linear"`. It uses the same trimmed unmatched-window estimate, but caps worst-case runtime instead of matrix allocation. When the cap is exceeded, `lcs-linear` also falls back to an atomic array `replace`. If you do not set `lcsLinearMaxCells`, `lcs-linear` keeps its previous behavior and will continue to run without an automatic fallback.
+`lcsLinearMaxCells` is the matching guardrail for `arrayStrategy: "lcs-linear"` and defaults to `250_000`. It uses the same trimmed unmatched-window estimate, but caps worst-case runtime instead of matrix allocation. When the cap is exceeded, `lcs-linear` also falls back to an atomic array `replace`. Set `lcsLinearMaxCells: Number.POSITIVE_INFINITY` only when you explicitly want the previous unbounded behavior and accept the CPU cost for large unmatched arrays.
 
 `diffJsonPatch` keeps the existing `add`/`remove`/`replace` output by default. Set
 `emitMoves` and/or `emitCopies` to opt into deterministic RFC 6902 `move`/`copy`

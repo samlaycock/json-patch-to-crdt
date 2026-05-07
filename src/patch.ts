@@ -299,7 +299,7 @@ export function compileJsonPatchOpToIntent(
  * By default arrays use a deterministic LCS strategy.
  * Pass `{ arrayStrategy: "atomic" }` for single-op array replacement.
  * Pass `{ arrayStrategy: "lcs-linear" }` for a lower-memory LCS variant.
- * Use `lcsLinearMaxCells` to optionally cap worst-case `lcs-linear` work and
+ * Use `lcsLinearMaxCells` to cap worst-case `lcs-linear` work and
  * fall back to an atomic array replacement for very large unmatched windows.
  * Pass `{ emitMoves: true }` or `{ emitCopies: true }` to opt into RFC 6902
  * move/copy emission when a deterministic rewrite is available.
@@ -1097,16 +1097,17 @@ function shouldUseLinearLcsDiff(
   options: DiffOptions,
 ): boolean {
   const cap = options.lcsLinearMaxCells;
-  if (cap === undefined || cap === Number.POSITIVE_INFINITY) {
+  if (cap === Number.POSITIVE_INFINITY) {
     return true;
   }
 
-  if (!Number.isFinite(cap) || cap < 1) {
+  const effectiveCap = cap ?? DEFAULT_LCS_MAX_CELLS;
+  if (!Number.isFinite(effectiveCap) || effectiveCap < 1) {
     return false;
   }
 
   const estimatedCells = (baseLength + 1) * (nextLength + 1);
-  return estimatedCells <= cap;
+  return estimatedCells <= effectiveCap;
 }
 
 function finalizeArrayOps(
