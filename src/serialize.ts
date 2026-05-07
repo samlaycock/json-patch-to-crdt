@@ -135,25 +135,33 @@ export function deserializeState(
   data: SerializedState,
   options: DeserializeOptions = {},
 ): CrdtState {
-  const raw = readSerializedStateEnvelope(data);
-  const budgetMeter = createBudgetMeter(options.resourceBudget);
-  throwIfAborted(options.signal);
+  try {
+    const raw = readSerializedStateEnvelope(data);
+    const budgetMeter = createBudgetMeter(options.resourceBudget);
+    throwIfAborted(options.signal);
 
-  if (!("doc" in raw)) {
-    fail("INVALID_SERIALIZED_SHAPE", "/doc", "serialized state is missing doc");
+    if (!("doc" in raw)) {
+      fail("INVALID_SERIALIZED_SHAPE", "/doc", "serialized state is missing doc");
+    }
+
+    if (!("clock" in raw)) {
+      fail("INVALID_SERIALIZED_SHAPE", "/clock", "serialized state is missing clock");
+    }
+
+    const clockRaw = asRecord(raw.clock, "/clock");
+    const actor = readActor(clockRaw.actor, "/clock/actor");
+    const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
+    const doc = deserializeDocInternal(raw.doc as SerializedDoc, budgetMeter, options.signal);
+    const observedCtr = readCachedObservedVersionVector(doc)?.[actor] ?? 0;
+    const clock = createClock(actor, Math.max(ctr, observedCtr));
+    return { doc, clock };
+  } catch (error) {
+    if (error instanceof OperationCancelledError) {
+      throw new DeserializeError("OPERATION_CANCELLED", "/", error.message);
+    }
+
+    throw error;
   }
-
-  if (!("clock" in raw)) {
-    fail("INVALID_SERIALIZED_SHAPE", "/clock", "serialized state is missing clock");
-  }
-
-  const clockRaw = asRecord(raw.clock, "/clock");
-  const actor = readActor(clockRaw.actor, "/clock/actor");
-  const ctr = readCounter(clockRaw.ctr, "/clock/ctr");
-  const doc = deserializeDocInternal(raw.doc as SerializedDoc, budgetMeter, options.signal);
-  const observedCtr = readCachedObservedVersionVector(doc)?.[actor] ?? 0;
-  const clock = createClock(actor, Math.max(ctr, observedCtr));
-  return { doc, clock };
 }
 
 /** Non-throwing `deserializeState` variant with typed validation details. */
