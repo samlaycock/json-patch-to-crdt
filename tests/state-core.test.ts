@@ -1224,6 +1224,89 @@ describe("resource budgets", () => {
     expect(result.error.limit).toBe(2);
     expect(result.error.actual).toBeGreaterThan(2);
   });
+
+  it("rejects wide serialized object payloads that exceed the configured object entry budget", () => {
+    const state = createState({ a: 1, b: 2, c: 3 }, { actor: "A" });
+    const result = tryDeserializeState(serializeState(state), {
+      resourceBudget: {
+        objectEntries: 2,
+      },
+    });
+
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected wide serialized object budget rejection");
+    }
+
+    expect(result.error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+    if (result.error.reason !== "RESOURCE_BUDGET_EXCEEDED") {
+      throw new Error("Expected wide serialized object budget rejection");
+    }
+
+    expect(result.error.budget).toBe("objectEntries");
+    expect(result.error.limit).toBe(2);
+    expect(result.error.actual).toBe(3);
+    expect(result.error.path).toBe("/root/entries");
+  });
+
+  it("rejects large shallow serialized sequences that exceed the configured sequence budget", () => {
+    const state = createState({ items: [1, 2, 3] }, { actor: "A" });
+    const result = tryDeserializeState(serializeState(state), {
+      resourceBudget: {
+        sequenceElements: 2,
+      },
+    });
+
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected shallow serialized sequence budget rejection");
+    }
+
+    expect(result.error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+    if (result.error.reason !== "RESOURCE_BUDGET_EXCEEDED") {
+      throw new Error("Expected shallow serialized sequence budget rejection");
+    }
+
+    expect(result.error.budget).toBe("sequenceElements");
+    expect(result.error.limit).toBe(2);
+    expect(result.error.actual).toBe(3);
+    expect(result.error.path).toBe("/root/entries/items/node/elems");
+  });
+
+  it("rejects large serialized tombstone maps that exceed object entry budgets", () => {
+    const serialized: SerializedDoc = {
+      version: 1,
+      root: {
+        kind: "obj",
+        entries: {},
+        tombstone: {
+          a: { actor: "A", ctr: 1 },
+          b: { actor: "A", ctr: 2 },
+          c: { actor: "A", ctr: 3 },
+        },
+      },
+    };
+    const result = tryDeserializeDoc(serialized, {
+      resourceBudget: {
+        objectEntries: 2,
+      },
+    });
+
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected serialized tombstone budget rejection");
+    }
+
+    expect(result.error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+    if (result.error.reason !== "RESOURCE_BUDGET_EXCEEDED") {
+      throw new Error("Expected serialized tombstone budget rejection");
+    }
+
+    expect(result.error.budget).toBe("objectEntries");
+    expect(result.error.limit).toBe(2);
+    expect(result.error.actual).toBe(3);
+    expect(result.error.path).toBe("/root/tombstone");
+  });
 });
 
 describe("json pointer parsing", () => {

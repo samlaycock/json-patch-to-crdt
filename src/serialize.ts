@@ -256,6 +256,8 @@ function deserializeNode(
     const tombstoneRaw = asRecord(raw.tombstone, `${path}/tombstone`);
     budgetMeter?.count("objectEntries", Object.keys(entriesRaw).length, `${path}/entries`);
     budgetMeter?.count("serializedElements", Object.keys(entriesRaw).length, `${path}/entries`);
+    budgetMeter?.count("objectEntries", Object.keys(tombstoneRaw).length, `${path}/tombstone`);
+    budgetMeter?.count("serializedElements", Object.keys(tombstoneRaw).length, `${path}/tombstone`);
 
     const entries = new Map<string, { node: Node; dot: Dot }>();
     for (const [k, v] of Object.entries(entriesRaw)) {
