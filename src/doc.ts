@@ -15,6 +15,7 @@ import type {
   RgaSeq,
 } from "./types";
 
+import { createBudgetMeter } from "./budget";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot, dotToElemId } from "./dot";
 import { materialize } from "./materialize";
@@ -1477,7 +1478,7 @@ function diffNodeToPatch(
  */
 export function crdtToJsonPatch(base: Doc, head: Doc, options?: DiffOptions): JsonPatchOp[] {
   // Preserve full-document runtime guardrail behavior for strict/normalize modes.
-  if ((options?.jsonValidation ?? "none") !== "none") {
+  if ((options?.jsonValidation ?? "none") !== "none" || options?.resourceBudget !== undefined) {
     return diffJsonPatch(materialize(base.root), materialize(head.root), options);
   }
 
@@ -1507,6 +1508,13 @@ export function crdtToFullReplace(doc: Doc): JsonPatchOp[] {
 function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
   const evalTestAgainst = options.evalTestAgainst ?? "head";
   const semantics = options.semantics ?? "sequential";
+  const budgetMeter = createBudgetMeter(options.resourceBudget);
+
+  try {
+    budgetMeter?.count("patchOperations", options.patch.length);
+  } catch (error) {
+    return toApplyError(error);
+  }
 
   if (semantics === "base") {
     const baseJson = materialize(options.base.root);
@@ -1514,6 +1522,7 @@ function jsonPatchToCrdtInternal(options: JsonPatchToCrdtOptions): ApplyResult {
     try {
       intents = compileJsonPatchToIntent(baseJson, options.patch, {
         semantics: "base",
+        resourceBudget: options.resourceBudget,
       });
     } catch (error) {
       return toApplyError(error);
