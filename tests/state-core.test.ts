@@ -45,6 +45,7 @@ import {
   objSet,
   PatchCompileError,
   PatchError,
+  ResourceBudgetError,
   DeserializeError,
   TraversalDepthError,
   parseJsonPointer,
@@ -976,6 +977,116 @@ describe("clock and state", () => {
       expect(result.error.path).toBe("/n");
       expect(result.error.opIndex).toBe(0);
     }
+  });
+});
+
+describe("resource budgets", () => {
+  it("rejects patch programs that exceed the configured patch operation budget", () => {
+    const state = createState({ list: [0, 1] }, { actor: "A" });
+    const result = tryApplyPatch(
+      state,
+      [
+        { op: "replace", path: "/list/0", value: 10 },
+        { op: "replace", path: "/list/1", value: 11 },
+      ],
+      {
+        resourceBudget: {
+          patchOperations: 1,
+        },
+      },
+    );
+
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected patch budget rejection");
+    }
+
+    expect(result.error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+    expect(result.error.budget).toBe("patchOperations");
+    expect(result.error.limit).toBe(1);
+    expect(result.error.actual).toBe(2);
+  });
+
+  it("rejects wide object diffs that exceed the configured object entry budget", () => {
+    const base = { keep: 1 };
+    const next = { keep: 1, addA: 2, addB: 3 };
+
+    expect(() =>
+      diffJsonPatch(base, next, {
+        resourceBudget: {
+          objectEntries: 2,
+        },
+      }),
+    ).toThrow(ResourceBudgetError);
+
+    try {
+      diffJsonPatch(base, next, {
+        resourceBudget: {
+          objectEntries: 2,
+        },
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ResourceBudgetError);
+      if (error instanceof ResourceBudgetError) {
+        expect(error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+        expect(error.budget).toBe("objectEntries");
+        expect(error.limit).toBe(2);
+        expect(error.actual).toBe(3);
+      }
+      return;
+    }
+
+    throw new Error("Expected diff budget rejection");
+  });
+
+  it("rejects merges that exceed the configured sequence element budget", () => {
+    const left = createState({ list: [1, 2] }, { actor: "A" });
+    const right = createState({ list: [3] }, { actor: "B" });
+    const result = tryMergeState(left, right, {
+      unrelatedArrays: "unsafe-union",
+      resourceBudget: {
+        sequenceElements: 2,
+      },
+    });
+
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected merge budget rejection");
+    }
+
+    expect(result.error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+    expect(result.error.budget).toBe("sequenceElements");
+    expect(result.error.limit).toBe(2);
+    expect(result.error.actual).toBe(3);
+  });
+
+  it("rejects serialized payloads that exceed the configured element inspection budget", () => {
+    const state = createState(
+      {
+        items: [1, 2, 3],
+      },
+      { actor: "A" },
+    );
+    const serialized = serializeState(state);
+    const result = tryDeserializeState(serialized, {
+      resourceBudget: {
+        serializedElements: 2,
+      },
+    });
+
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected deserialize budget rejection");
+    }
+
+    expect(result.error.reason).toBe("RESOURCE_BUDGET_EXCEEDED");
+    if (result.error.reason !== "RESOURCE_BUDGET_EXCEEDED") {
+      throw new Error("Expected deserialize budget rejection");
+    }
+
+    expect(result.error.budget).toBe("serializedElements");
+    expect(result.error.limit).toBe(2);
+    expect(result.error.actual).toBeGreaterThan(2);
   });
 });
 

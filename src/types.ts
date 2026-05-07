@@ -148,15 +148,49 @@ export interface LegacySerializedState {
 export type SerializedState = SerializedStateV1 | LegacySerializedState;
 
 /** Typed reasons for rejecting malformed serialized CRDT payloads. */
-export type DeserializeErrorReason = "INVALID_SERIALIZED_SHAPE" | "INVALID_SERIALIZED_INVARIANT";
+export type DeserializeErrorReason =
+  | "INVALID_SERIALIZED_SHAPE"
+  | "INVALID_SERIALIZED_INVARIANT"
+  | "RESOURCE_BUDGET_EXCEEDED";
+
+export type ResourceBudgetKind =
+  | "patchOperations"
+  | "objectEntries"
+  | "sequenceElements"
+  | "visitedNodes"
+  | "serializedElements"
+  | "arrayDiffCells";
+
+export interface ResourceBudget {
+  patchOperations?: number;
+  objectEntries?: number;
+  sequenceElements?: number;
+  visitedNodes?: number;
+  serializedElements?: number;
+  arrayDiffCells?: number;
+}
+
+export interface ResourceBudgetExceededFailure {
+  code: 409;
+  reason: "RESOURCE_BUDGET_EXCEEDED";
+  message: string;
+  budget: ResourceBudgetKind;
+  limit: number;
+  actual: number;
+  path?: string;
+  opIndex?: number;
+}
 
 /** Structured failure payload used by non-throwing deserialize helpers. */
 export type DeserializeFailure =
   | {
       code: 409;
       reason: DeserializeErrorReason;
-      path: string;
+      path?: string;
       message: string;
+      budget?: ResourceBudgetKind;
+      limit?: number;
+      actual?: number;
     }
   | {
       code: 409;
@@ -256,6 +290,7 @@ export type PatchErrorReason =
   | "INVALID_MOVE"
   | "DOT_GENERATION_EXHAUSTED"
   | "MAX_DEPTH_EXCEEDED"
+  | "RESOURCE_BUDGET_EXCEEDED"
   | "LINEAGE_MISMATCH";
 
 /** Structured conflict payload used by non-throwing APIs. */
@@ -271,6 +306,10 @@ export type ApplyError = {
   path?: string;
   /** Optional patch operation index when available. */
   opIndex?: number;
+  /** Resource-budget context when `reason` is `RESOURCE_BUDGET_EXCEEDED`. */
+  budget?: ResourceBudgetKind;
+  limit?: number;
+  actual?: number;
 };
 
 /** Result of applying a patch: success or structured conflict details. */
@@ -292,6 +331,7 @@ export type PatchSemantics = "base" | "sequential";
 /** Options for compile/validation helpers. */
 export type CompilePatchOptions = {
   semantics?: PatchSemantics;
+  resourceBudget?: ResourceBudget;
 };
 
 /**
@@ -304,6 +344,7 @@ export type ApplyPatchOptions = {
   base?: CrdtState;
   testAgainst?: "head" | "base";
   semantics?: PatchSemantics;
+  resourceBudget?: ResourceBudget;
   /**
    * Reject array inserts when the base parent path is missing.
    * Defaults to `false` to preserve legacy behavior that can auto-create
@@ -361,6 +402,7 @@ export type MergeStateOptions = {
    * Ignored when `unrelatedArrays` is also provided.
    */
   requireSharedOrigin?: boolean;
+  resourceBudget?: ResourceBudget;
 };
 
 /** Options for `mergeDoc`. */
@@ -377,7 +419,12 @@ export type MergeDocOptions = {
    * Ignored when `unrelatedArrays` is also provided.
    */
   requireSharedOrigin?: boolean;
+  resourceBudget?: ResourceBudget;
 };
+
+export interface DeserializeOptions {
+  resourceBudget?: ResourceBudget;
+}
 
 /** Non-throwing result for `mergeDoc`. */
 export type TryMergeDocResult = { ok: true; doc: Doc } | { ok: false; error: ApplyError };
@@ -427,6 +474,7 @@ export type JsonPatchToCrdtOptions = {
   bumpCounterAbove?: (ctr: number) => void;
   semantics?: PatchSemantics;
   strictParents?: boolean;
+  resourceBudget?: ResourceBudget;
 };
 
 /** Options for `crdtToJsonPatch` and `diffJsonPatch`. */
@@ -476,6 +524,7 @@ export type DiffOptions = {
    * Defaults to `"none"` for backward compatibility.
    */
   jsonValidation?: JsonValidationMode;
+  resourceBudget?: ResourceBudget;
 };
 
 /**

@@ -12,11 +12,13 @@ import type {
   PatchErrorReason,
   RgaElem,
   RgaSeq,
+  ResourceBudgetKind,
   TryMergeDocResult,
   TryMergeStateResult,
   UnrelatedArraysStrategy,
 } from "./types";
 
+import { ResourceBudgetError, createBudgetMeter, toBudgetApplyError } from "./budget";
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot } from "./dot";
@@ -45,12 +47,16 @@ type MergeDocResult = {
 type MergeConfig = {
   actor?: ActorId;
   unrelatedArrays: UnrelatedArraysStrategy;
+  budgetMeter?: ReturnType<typeof createBudgetMeter>;
 };
 
 /** Error thrown by throwing merge helpers (`mergeDoc` / `mergeState`). */
 export class MergeError extends Error {
   readonly code: 409;
   readonly reason: PatchErrorReason;
+  readonly budget?: ResourceBudgetKind;
+  readonly limit?: number;
+  readonly actual?: number;
   readonly path?: string;
 
   constructor(error: ApplyError) {
@@ -58,6 +64,11 @@ export class MergeError extends Error {
     this.name = "MergeError";
     this.code = error.code;
     this.reason = error.reason;
+    if (error.reason === "RESOURCE_BUDGET_EXCEEDED") {
+      this.budget = error.budget;
+      this.limit = error.limit;
+      this.actual = error.actual;
+    }
     this.path = error.path;
   }
 }
@@ -89,10 +100,11 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
   try {
     const config: MergeConfig = {
       unrelatedArrays: resolveUnrelatedArraysStrategy(options),
+      budgetMeter: createBudgetMeter(options.resourceBudget),
     };
 
     if (config.unrelatedArrays === "reject") {
-      const mismatchPath = findSeqLineageMismatch(a.root, b.root, []);
+      const mismatchPath = findSeqLineageMismatch(a.root, b.root, [], config);
       if (mismatchPath !== null) {
         return {
           ok: false,
@@ -124,6 +136,10 @@ export function tryMergeDoc(a: Doc, b: Doc, options: MergeDocOptions = {}): TryM
 
     if (error instanceof TraversalDepthError) {
       return { ok: false, error: toDepthApplyError(error) };
+    }
+
+    if (error instanceof ResourceBudgetError) {
+      return { ok: false, error: toBudgetApplyError(error) };
     }
 
     throw error;
@@ -161,10 +177,11 @@ export function tryMergeState(
     const config: MergeConfig = {
       actor,
       unrelatedArrays: resolveUnrelatedArraysStrategy(options),
+      budgetMeter: createBudgetMeter(options.resourceBudget),
     };
 
     if (config.unrelatedArrays === "reject") {
-      const mismatchPath = findSeqLineageMismatch(a.doc.root, b.doc.root, []);
+      const mismatchPath = findSeqLineageMismatch(a.doc.root, b.doc.root, [], config);
       if (mismatchPath !== null) {
         return {
           ok: false,
@@ -200,11 +217,20 @@ export function tryMergeState(
       return { ok: false, error: toDepthApplyError(error) };
     }
 
+    if (error instanceof ResourceBudgetError) {
+      return { ok: false, error: toBudgetApplyError(error) };
+    }
+
     throw error;
   }
 }
 
-function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null {
+function findSeqLineageMismatch(
+  a: Node,
+  b: Node,
+  path: string[],
+  config: MergeConfig,
+): string | null {
   const stack: Array<{ a: Node; b: Node; path: string[]; depth: number }> = [
     { a, b, path, depth: path.length },
   ];
@@ -212,8 +238,14 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
   while (stack.length > 0) {
     const frame = stack.pop()!;
     assertTraversalDepth(frame.depth);
+    config.budgetMeter?.count("visitedNodes", 1, stringifyJsonPointer(frame.path));
 
     if (frame.a.kind === "seq" && frame.b.kind === "seq") {
+      config.budgetMeter?.count(
+        "sequenceElements",
+        frame.a.elems.size + frame.b.elems.size,
+        stringifyJsonPointer(frame.path),
+      );
       const hasElemsA = frame.a.elems.size > 0;
       const hasElemsB = frame.b.elems.size > 0;
       if (hasElemsA && hasElemsB) {
@@ -235,6 +267,11 @@ function findSeqLineageMismatch(a: Node, b: Node, path: string[]): string | null
       const left = frame.a;
       const right = frame.b;
       const sharedKeys = [...left.entries.keys()].filter((key) => right.entries.has(key));
+      config.budgetMeter?.count(
+        "objectEntries",
+        sharedKeys.length,
+        stringifyJsonPointer(frame.path),
+      );
       for (let i = sharedKeys.length - 1; i >= 0; i--) {
         const key = sharedKeys[i]!;
         const nextA = left.entries.get(key)!.node;
@@ -339,6 +376,7 @@ function mergeNodeAtDepth(
   config: MergeConfig,
 ): MergeNodeResult {
   assertTraversalDepth(depth);
+  config.budgetMeter?.count("visitedNodes", 1, stringifyJsonPointer(path));
 
   // Same kind → merge semantics
   if (a.kind === "lww" && b.kind === "lww") return mergeLww(a, b, config.actor);
@@ -378,6 +416,7 @@ function mergeObj(
 
   // Merge tombstones: max dot per key.
   const allTombKeys = new Set([...a.tombstone.keys(), ...b.tombstone.keys()]);
+  config.budgetMeter?.count("objectEntries", allTombKeys.size, stringifyJsonPointer(path));
   for (const key of allTombKeys) {
     const da = a.tombstone.get(key);
     const db = b.tombstone.get(key);
@@ -396,6 +435,7 @@ function mergeObj(
 
   // Merge entries: union of keys, recursive merge when both present.
   const allKeys = new Set([...a.entries.keys(), ...b.entries.keys()]);
+  config.budgetMeter?.count("objectEntries", allKeys.size, stringifyJsonPointer(path));
   for (const key of allKeys) {
     const ea = a.entries.get(key);
     const eb = b.entries.get(key);
@@ -442,10 +482,16 @@ function mergeSeq(
   config: MergeConfig,
 ): MergeNodeResult {
   assertTraversalDepth(depth);
+  config.budgetMeter?.count("visitedNodes", 1, stringifyJsonPointer(path));
 
   // Atomic-replace: when both seqs are non-empty and share no element IDs,
   // the one with the higher representative dot wins entirely.
   if (config.unrelatedArrays === "atomic-replace" && a.elems.size > 0 && b.elems.size > 0) {
+    config.budgetMeter?.count(
+      "sequenceElements",
+      a.elems.size + b.elems.size,
+      stringifyJsonPointer(path),
+    );
     let shared = false;
     for (const id of a.elems.keys()) {
       if (b.elems.has(id)) {
@@ -464,6 +510,7 @@ function mergeSeq(
 
   // Union by element ID.
   const allIds = new Set([...a.elems.keys(), ...b.elems.keys()]);
+  config.budgetMeter?.count("sequenceElements", allIds.size, stringifyJsonPointer(path));
   for (const id of allIds) {
     const ea = a.elems.get(id);
     const eb = b.elems.get(id);

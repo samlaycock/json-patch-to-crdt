@@ -41,6 +41,7 @@ export {
   jsonEquals,
   stableJsonValueKey,
 } from "./patch";
+export { ResourceBudgetError } from "./budget";
 
 // Node-level materialization helper.
 export { materialize } from "./materialize";
@@ -65,6 +66,7 @@ export type {
   CompactStateTombstonesResult,
   CompilePatchOptions,
   DeserializeFailure,
+  DeserializeOptions,
   Doc,
   Dot,
   ElemId,
@@ -78,6 +80,9 @@ export type {
   ObjNode,
   RgaElem,
   RgaSeq,
+  ResourceBudget,
+  ResourceBudgetExceededFailure,
+  ResourceBudgetKind,
   SerializedClock,
   SerializedDoc,
   SerializedNode,

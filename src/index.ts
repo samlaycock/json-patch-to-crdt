@@ -10,10 +10,14 @@ export type {
   CrdtState,
   CompactStateTombstonesResult,
   DeserializeFailure,
+  DeserializeOptions,
   DiffOptions,
   DeserializeErrorReason,
   ForkStateOptions,
   JsonValidationMode,
+  ResourceBudget,
+  ResourceBudgetExceededFailure,
+  ResourceBudgetKind,
   JsonPatch,
   JsonPatchOp,
   JsonPrimitive,
@@ -47,6 +51,7 @@ export {
 
 export { JsonValueValidationError } from "./json-value";
 export { ClockValidationError } from "./clock";
+export { ResourceBudgetError } from "./budget";
 
 // JSON helpers
 export { diffJsonPatch } from "./patch";

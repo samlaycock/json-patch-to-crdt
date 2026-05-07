@@ -18,6 +18,7 @@ import type {
   Node,
   PatchErrorReason,
   PatchSemantics,
+  ResourceBudgetKind,
   TryApplyPatchAsActorResult,
   TryApplyPatchInPlaceResult,
   TryApplyPatchResult,
@@ -25,6 +26,7 @@ import type {
   VersionVector,
 } from "./types";
 
+import { ResourceBudgetError, createBudgetMeter, toBudgetApplyError } from "./budget";
 import { createClock, cloneClock } from "./clock";
 import { TraversalDepthError, toDepthApplyError } from "./depth";
 import { applyIntentsToCrdt, cloneDoc, docFromJson } from "./doc";
@@ -50,6 +52,9 @@ import { observedVersionVector } from "./version-vector";
 export class PatchError extends Error {
   readonly code: 409;
   readonly reason: PatchErrorReason;
+  readonly budget?: ResourceBudgetKind;
+  readonly limit?: number;
+  readonly actual?: number;
   readonly path?: string;
   readonly opIndex?: number;
 
@@ -70,6 +75,11 @@ export class PatchError extends Error {
 
     this.code = errorOrMessage.code;
     this.reason = errorOrMessage.reason;
+    if (errorOrMessage.reason === "RESOURCE_BUDGET_EXCEEDED") {
+      this.budget = errorOrMessage.budget;
+      this.limit = errorOrMessage.limit;
+      this.actual = errorOrMessage.actual;
+    }
     this.path = errorOrMessage.path;
     this.opIndex = errorOrMessage.opIndex;
   }
@@ -310,6 +320,8 @@ function applyPatchInternal(
     return preparedPatch;
   }
 
+  const budgetMeter = createBudgetMeter(options.resourceBudget);
+  budgetMeter?.count("patchOperations", preparedPatch.patch.length);
   const runtimePatch = preparedPatch.patch;
   const semantics: PatchSemantics = options.semantics ?? "sequential";
 
@@ -923,9 +935,15 @@ function compilePreparedIntents(
   semantics: PatchSemantics = "sequential",
   pointerCache?: Map<string, string[]>,
   opIndexOffset = 0,
+  budgetMeter?: ReturnType<typeof createBudgetMeter>,
 ): { ok: true; intents: IntentOp[] } | ApplyError {
   try {
-    const compileOptions = toCompilePatchOptions(semantics, pointerCache, opIndexOffset);
+    const compileOptions = toCompilePatchOptions(
+      semantics,
+      pointerCache,
+      opIndexOffset,
+      budgetMeter,
+    );
     if (patch.length === 1) {
       return {
         ok: true,
@@ -946,12 +964,15 @@ function toCompilePatchOptions(
   semantics: PatchSemantics,
   pointerCache?: Map<string, string[]>,
   opIndexOffset = 0,
+  budgetMeter?: ReturnType<typeof createBudgetMeter>,
 ): CompilePatchOptions {
   // Internal session hints are consumed in patch.ts but are not part of the public type.
   return {
     semantics,
+    resourceBudget: undefined,
     pointerCache,
     opIndexOffset,
+    budgetMeter,
   } as CompilePatchOptions;
 }
 
@@ -1033,6 +1054,10 @@ function mergePointerPaths(basePointer: string, nestedPointer: string): string {
 }
 
 function toApplyError(error: unknown): ApplyError {
+  if (error instanceof ResourceBudgetError) {
+    return toBudgetApplyError(error);
+  }
+
   if (error instanceof TraversalDepthError) {
     return toDepthApplyError(error);
   }

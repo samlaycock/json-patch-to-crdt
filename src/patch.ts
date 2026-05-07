@@ -7,6 +7,7 @@ import type {
   PatchErrorReason,
 } from "./types";
 
+import { ResourceBudgetMeter, createBudgetMeter } from "./budget";
 import { assertTraversalDepth } from "./depth";
 import { coerceRuntimeJsonValue } from "./json-value";
 import { ROOT_KEY } from "./types";
@@ -27,6 +28,7 @@ type TrimmedArrayWindow = {
 type InternalCompilePatchOptions = {
   pointerCache?: Map<string, string[]>;
   opIndexOffset?: number;
+  budgetMeter?: ResourceBudgetMeter;
 };
 
 interface DiffValueFrame {
@@ -249,11 +251,13 @@ export function compileJsonPatchToIntent(
 ): IntentOp[] {
   // Internal session hints are threaded from state.ts via structural typing.
   const internalOptions = options as CompilePatchOptions & InternalCompilePatchOptions;
+  const budgetMeter = internalOptions.budgetMeter ?? createBudgetMeter(options.resourceBudget);
   const semantics = options.semantics ?? "sequential";
   const opIndexOffset = internalOptions.opIndexOffset ?? 0;
   let workingBase: JsonValue = baseJson;
   const pointerCache = internalOptions.pointerCache ?? new Map<string, string[]>();
   const intents: IntentOp[] = [];
+  budgetMeter?.count("patchOperations", patch.length);
 
   for (let opIndex = 0; opIndex < patch.length; opIndex++) {
     const op = patch[opIndex]!;
@@ -285,6 +289,8 @@ export function compileJsonPatchOpToIntent(
   const semantics = options.semantics ?? "sequential";
   const pointerCache = internalOptions.pointerCache ?? new Map<string, string[]>();
   const opIndex = internalOptions.opIndexOffset ?? 0;
+  const budgetMeter = internalOptions.budgetMeter ?? createBudgetMeter(options.resourceBudget);
+  budgetMeter?.count("patchOperations", 1, undefined, opIndex);
   return compileSingleOp(baseJson, op, opIndex, semantics, pointerCache);
 }
 
@@ -307,12 +313,13 @@ export function diffJsonPatch(
   next: JsonValue,
   options: DiffOptions = {},
 ): JsonPatchOp[] {
+  const budgetMeter = createBudgetMeter(options.resourceBudget);
   const runtimeMode = options.jsonValidation ?? "none";
   const runtimeBase = coerceRuntimeJsonValue(base, runtimeMode);
   const runtimeNext = coerceRuntimeJsonValue(next, runtimeMode);
   const ops: JsonPatchOp[] = [];
   const path: string[] = [];
-  diffValue(path, runtimeBase, runtimeNext, ops, options);
+  diffValue(path, runtimeBase, runtimeNext, ops, options, budgetMeter);
   return ops;
 }
 
@@ -322,6 +329,7 @@ function diffValue(
   next: JsonValue,
   ops: JsonPatchOp[],
   options: DiffOptions,
+  budgetMeter?: ResourceBudgetMeter,
 ): void {
   const stack: DiffFrame[] = [{ kind: "value", base, next }];
 
@@ -357,6 +365,7 @@ function diffValue(
     }
 
     assertTraversalDepth(path.length);
+    budgetMeter?.count("visitedNodes", 1, stringifyJsonPointer(path));
 
     if (frame.base === frame.next) {
       continue;
@@ -377,14 +386,14 @@ function diffValue(
       const arrayStrategy = options.arrayStrategy ?? "lcs";
 
       if (arrayStrategy === "lcs") {
-        if (!diffArrayWithLcsMatrix(path, frame.base, frame.next, ops, options)) {
+        if (!diffArrayWithLcsMatrix(path, frame.base, frame.next, ops, options, budgetMeter)) {
           ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
         }
         continue;
       }
 
       if (arrayStrategy === "lcs-linear") {
-        if (!diffArrayWithLinearLcs(path, frame.base, frame.next, ops, options)) {
+        if (!diffArrayWithLinearLcs(path, frame.base, frame.next, ops, options, budgetMeter)) {
           ops.push({ op: "replace", path: stringifyJsonPointer(path), value: frame.next });
         }
         continue;
@@ -402,6 +411,11 @@ function diffValue(
     }
 
     const { sharedKeys, baseOnlyKeys, nextOnlyKeys } = collectObjectKeys(frame.base, frame.next);
+    budgetMeter?.count(
+      "objectEntries",
+      sharedKeys.length + baseOnlyKeys.length + nextOnlyKeys.length,
+      stringifyJsonPointer(path),
+    );
     const hasStructuralChanges = baseOnlyKeys.length > 0 || nextOnlyKeys.length > 0;
     if (
       !hasStructuralChanges &&
@@ -639,12 +653,15 @@ function diffArrayWithLcsMatrix(
   next: JsonValue[],
   ops: JsonPatchOp[],
   options: DiffOptions,
+  budgetMeter?: ResourceBudgetMeter,
 ): boolean {
   const window = trimEqualArrayEdges(base, next);
   const baseStart = window.baseStart;
   const nextStart = window.nextStart;
   const n = window.unmatchedBaseLength;
   const m = window.unmatchedNextLength;
+  budgetMeter?.count("sequenceElements", n + m, stringifyJsonPointer(path));
+  budgetMeter?.count("arrayDiffCells", (n + 1) * (m + 1), stringifyJsonPointer(path));
 
   if (!shouldUseLcsDiff(n, m, options.lcsMaxCells)) {
     return false;
@@ -674,8 +691,19 @@ function diffArrayWithLinearLcs(
   next: JsonValue[],
   ops: JsonPatchOp[],
   options: DiffOptions,
+  budgetMeter?: ResourceBudgetMeter,
 ): boolean {
   const window = trimEqualArrayEdges(base, next);
+  budgetMeter?.count(
+    "sequenceElements",
+    window.unmatchedBaseLength + window.unmatchedNextLength,
+    stringifyJsonPointer(path),
+  );
+  budgetMeter?.count(
+    "arrayDiffCells",
+    (window.unmatchedBaseLength + 1) * (window.unmatchedNextLength + 1),
+    stringifyJsonPointer(path),
+  );
   if (!shouldUseLinearLcsDiff(window.unmatchedBaseLength, window.unmatchedNextLength, options)) {
     return false;
   }
