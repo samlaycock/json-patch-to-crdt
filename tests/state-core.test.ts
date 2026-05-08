@@ -1,6 +1,11 @@
 /* oxlint-disable no-unused-vars */
 import { describe, expect, it } from "bun:test";
 
+import type {
+  Doc as PublicDoc,
+  SerializedDoc as PublicSerializedDoc,
+  TryDeserializeDocResult as PublicTryDeserializeDocResult,
+} from "../src/index";
 import type { SerializedSyncRecord, SyncEnvelope, SyncJson, SyncRecord } from "./test-utils";
 
 import {
@@ -1696,6 +1701,14 @@ describe("materialize", () => {
 });
 
 describe("serialization", () => {
+  it("exports public doc serialization types alongside public doc helpers", () => {
+    const doc = docFromJson({ counter: 1 }, () => dot("A", 1)) as PublicDoc;
+    const serialized: PublicSerializedDoc = serializeDoc(doc);
+    const result: PublicTryDeserializeDocResult = tryDeserializeDoc(serialized);
+
+    expect(result.ok).toBeTrue();
+  });
+
   it("serializes and deserializes documents", () => {
     const doc = docFromJsonWithDot({ list: ["a", "b"], meta: { ok: true } }, dot("A", 1));
     const payload: SerializedDoc = serializeDoc(doc);
