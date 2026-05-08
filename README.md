@@ -123,6 +123,26 @@ operations already applied before cancellation remain applied. Non-throwing APIs
 `reason: "OPERATION_CANCELLED"` and throwing APIs throw their usual domain error wrappers where
 applicable.
 
+## Performance Gates
+
+CI runs `bun run test:perf-gate` as a fixed-size performance smoke test for
+the hottest paths: array diffing, merge traversal, and sequential patch
+application. These gates are intentionally smaller and more stable than the
+microbenchmarks in `bench/`; they fail with the measured median, sample list,
+threshold, and tuning variable so regressions are actionable.
+
+Run the gate locally before changing hot-path code:
+
+```bash
+bun run test:perf-gate
+```
+
+The default budgets are deliberately generous for shared CI. If a runner needs
+environment-specific tuning, set `PERF_GATE_ARRAY_DIFF_MS`,
+`PERF_GATE_MERGE_TRAVERSAL_MS`, `PERF_GATE_SEQUENTIAL_APPLY_MS`, or
+`PERF_GATE_RUNS`. Use the `bench:*` scripts for deeper investigation and only
+raise a gate after confirming the slowdown is intentional.
+
 ## Serialize / Restore State
 
 ```ts

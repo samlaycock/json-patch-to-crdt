@@ -23,3 +23,6 @@ jobs:
 
       - name: Run test suite
         run: bun test
+
+      - name: Run performance gate
+        run: bun run test:perf-gate
