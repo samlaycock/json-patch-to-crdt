@@ -35,7 +35,9 @@ function parsePositiveNumberEnv(name: string, fallback: number): number {
 
 function median(values: readonly number[]): number {
   const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.floor((sorted.length - 1) / 2)]!;
+  const mid = Math.floor(sorted.length / 2);
+
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
 function measureGate(gate: PerfGate): PerfResult {
