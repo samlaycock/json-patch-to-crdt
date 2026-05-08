@@ -179,9 +179,10 @@ Persisted snapshot compatibility:
 
 The same compatibility contract applies to the lower-level `serializeDoc(...)` and
 `deserializeDoc(...)` helpers. Use the validation-only helpers at trust boundaries
-when you need to reject malformed snapshots before restoring runtime state; use
-`deserializeState(...)` or `deserializeDoc(...)` after validation passes when you
-need the CRDT data structures.
+when you need to reject malformed snapshots before restoring runtime state; they
+walk the serialized payload and CRDT invariants without allocating the runtime
+document maps returned by the deserializers. Use `deserializeState(...)` or
+`deserializeDoc(...)` when you need the CRDT data structures.
 
 ### Resource Budgets for Serialized Payloads
 

@@ -123,12 +123,18 @@ export function validateSerializedDoc(
   data: SerializedDoc,
   options: DeserializeOptions = {},
 ): ValidateSerializedDocResult {
-  const result = tryDeserializeDoc(data, options);
-  if (!result.ok) {
-    return { ok: false, error: result.error };
-  }
+  try {
+    const budgetMeter = createBudgetMeter(options.resourceBudget);
+    validateSerializedDocInternal(data, budgetMeter, options.signal);
+    return { ok: true };
+  } catch (error) {
+    const deserializeError = toDeserializeFailure(error);
+    if (deserializeError) {
+      return { ok: false, error: deserializeError };
+    }
 
-  return { ok: true };
+    throw error;
+  }
 }
 
 /** Serialize a full CRDT state (document + clock) to a JSON-safe representation. */
@@ -201,12 +207,32 @@ export function validateSerializedState(
   data: SerializedState,
   options: DeserializeOptions = {},
 ): ValidateSerializedStateResult {
-  const result = tryDeserializeState(data, options);
-  if (!result.ok) {
-    return { ok: false, error: result.error };
-  }
+  try {
+    const raw = readSerializedStateEnvelope(data);
+    const budgetMeter = createBudgetMeter(options.resourceBudget);
+    throwIfAborted(options.signal);
 
-  return { ok: true };
+    if (!("doc" in raw)) {
+      fail("INVALID_SERIALIZED_SHAPE", "/doc", "serialized state is missing doc");
+    }
+
+    if (!("clock" in raw)) {
+      fail("INVALID_SERIALIZED_SHAPE", "/clock", "serialized state is missing clock");
+    }
+
+    const clockRaw = asRecord(raw.clock, "/clock");
+    readActor(clockRaw.actor, "/clock/actor");
+    readCounter(clockRaw.ctr, "/clock/ctr");
+    validateSerializedDocInternal(raw.doc as SerializedDoc, budgetMeter, options.signal);
+    return { ok: true };
+  } catch (error) {
+    const deserializeError = toDeserializeFailure(error);
+    if (deserializeError) {
+      return { ok: false, error: deserializeError };
+    }
+
+    throw error;
+  }
 }
 
 function serializeNode(node: Doc["root"]): SerializedNode {
@@ -264,6 +290,21 @@ function readSerializedStateEnvelope(data: SerializedState): Record<string, unkn
   const raw = asRecord(data, "/");
   assertSerializedEnvelopeVersion(raw, "/version", SERIALIZED_STATE_VERSION, "state");
   return raw;
+}
+
+function validateSerializedDocInternal(
+  data: SerializedDoc,
+  budgetMeter?: ResourceBudgetMeter,
+  signal?: DeserializeOptions["signal"],
+): void {
+  throwIfAborted(signal);
+  const raw = readSerializedDocEnvelope(data);
+
+  if (!("root" in raw)) {
+    fail("INVALID_SERIALIZED_SHAPE", "/root", "serialized doc is missing root");
+  }
+
+  validateSerializedNode(raw.root, "/root", 0, budgetMeter, signal);
 }
 
 function deserializeNode(
@@ -436,6 +477,125 @@ function deserializeNode(
   return { kind: "seq", elems };
 }
 
+function validateSerializedNode(
+  node: unknown,
+  path: string,
+  depth: number,
+  budgetMeter?: ResourceBudgetMeter,
+  signal?: DeserializeOptions["signal"],
+): void {
+  throwIfAborted(signal);
+  assertTraversalDepth(depth);
+  budgetMeter?.count("visitedNodes", 1, path);
+  const raw = asRecord(node, path);
+  const kind = readString(raw.kind, `${path}/kind`);
+
+  if (kind === "lww") {
+    if (!("value" in raw)) {
+      fail("INVALID_SERIALIZED_SHAPE", `${path}/value`, "lww node is missing value");
+    }
+    if (!("dot" in raw)) {
+      fail("INVALID_SERIALIZED_SHAPE", `${path}/dot`, "lww node is missing dot");
+    }
+
+    readDot(raw.dot, `${path}/dot`);
+    readJsonValue(raw.value, `${path}/value`, depth + 1, budgetMeter, signal);
+    return;
+  }
+
+  if (kind === "obj") {
+    const entriesRaw = asRecord(raw.entries, `${path}/entries`);
+    const tombstoneRaw = asRecord(raw.tombstone, `${path}/tombstone`);
+    budgetMeter?.count("objectEntries", Object.keys(entriesRaw).length, `${path}/entries`);
+    budgetMeter?.count("serializedElements", Object.keys(entriesRaw).length, `${path}/entries`);
+    budgetMeter?.count("objectEntries", Object.keys(tombstoneRaw).length, `${path}/tombstone`);
+    budgetMeter?.count("serializedElements", Object.keys(tombstoneRaw).length, `${path}/tombstone`);
+
+    for (const [k, v] of Object.entries(entriesRaw)) {
+      throwIfAborted(signal);
+      const entryPath = `${path}/entries/${k}`;
+      const entryRaw = asRecord(v, entryPath);
+      readDot(entryRaw.dot, `${entryPath}/dot`);
+      validateSerializedNode(entryRaw.node, `${entryPath}/node`, depth + 1, budgetMeter, signal);
+    }
+
+    for (const [k, d] of Object.entries(tombstoneRaw)) {
+      throwIfAborted(signal);
+      readDot(d, `${path}/tombstone/${k}`);
+    }
+
+    return;
+  }
+
+  if (kind !== "seq") {
+    fail("INVALID_SERIALIZED_SHAPE", `${path}/kind`, `unsupported node kind '${kind}'`);
+  }
+
+  const elemsRaw = asRecord(raw.elems, `${path}/elems`);
+  budgetMeter?.count("sequenceElements", Object.keys(elemsRaw).length, `${path}/elems`);
+  budgetMeter?.count("serializedElements", Object.keys(elemsRaw).length, `${path}/elems`);
+  const predecessors = new Map<string, string>();
+  for (const [id, rawElem] of Object.entries(elemsRaw)) {
+    throwIfAborted(signal);
+    const elemPath = `${path}/elems/${id}`;
+    const elem = asRecord(rawElem, elemPath);
+    const elemId = readString(elem.id, `${elemPath}/id`);
+    if (elemId !== id) {
+      fail(
+        "INVALID_SERIALIZED_INVARIANT",
+        `${elemPath}/id`,
+        `sequence element id '${elemId}' does not match key '${id}'`,
+      );
+    }
+
+    const prev = readString(elem.prev, `${elemPath}/prev`);
+    const tombstone = readBoolean(elem.tombstone, `${elemPath}/tombstone`);
+    validateSerializedNode(elem.value, `${elemPath}/value`, depth + 1, budgetMeter, signal);
+    const insDot = readDot(elem.insDot, `${elemPath}/insDot`);
+    const delDot =
+      "delDot" in elem && elem.delDot !== undefined
+        ? readDot(elem.delDot, `${elemPath}/delDot`)
+        : undefined;
+    if (dotToElemId(insDot) !== id) {
+      fail(
+        "INVALID_SERIALIZED_INVARIANT",
+        `${elemPath}/insDot`,
+        "sequence element id must match its insertion dot",
+      );
+    }
+    if (!tombstone && delDot) {
+      fail(
+        "INVALID_SERIALIZED_INVARIANT",
+        `${elemPath}/delDot`,
+        "live sequence elements must not include delete metadata",
+      );
+    }
+
+    predecessors.set(id, prev);
+  }
+
+  for (const [id, prev] of predecessors) {
+    throwIfAborted(signal);
+    if (prev === id) {
+      fail(
+        "INVALID_SERIALIZED_INVARIANT",
+        `${path}/elems/${id}/prev`,
+        "sequence element cannot reference itself as predecessor",
+      );
+    }
+
+    if (prev !== HEAD_ELEM_ID && !predecessors.has(prev)) {
+      fail(
+        "INVALID_SERIALIZED_INVARIANT",
+        `${path}/elems/${id}/prev`,
+        `sequence predecessor '${prev}' does not exist`,
+      );
+    }
+  }
+
+  assertAcyclicSerializedRgaPredecessors(predecessors, path);
+}
+
 function assertAcyclicRgaPredecessors(elems: Map<string, RgaElem>, path: string): void {
   const visitState = new Map<string, 1 | 2>();
 
@@ -471,6 +631,52 @@ function assertAcyclicRgaPredecessors(elems: Map<string, RgaElem>, path: string)
       }
 
       currentId = elem.prev;
+    }
+
+    for (const id of trail) {
+      visitState.set(id, 2);
+    }
+  }
+}
+
+function assertAcyclicSerializedRgaPredecessors(
+  predecessors: Map<string, string>,
+  path: string,
+): void {
+  const visitState = new Map<string, 1 | 2>();
+
+  for (const startId of predecessors.keys()) {
+    if (visitState.get(startId) === 2) {
+      continue;
+    }
+
+    const trail: string[] = [];
+    const trailSet = new Set<string>();
+    let currentId: string | undefined = startId;
+
+    while (currentId) {
+      if (trailSet.has(currentId)) {
+        fail(
+          "INVALID_SERIALIZED_INVARIANT",
+          `${path}/elems/${currentId}/prev`,
+          `sequence predecessor cycle detected at '${currentId}'`,
+        );
+      }
+
+      if (visitState.get(currentId) === 2) {
+        break;
+      }
+
+      trail.push(currentId);
+      trailSet.add(currentId);
+      visitState.set(currentId, 1);
+
+      const prev = predecessors.get(currentId);
+      if (!prev || prev === HEAD_ELEM_ID) {
+        break;
+      }
+
+      currentId = prev;
     }
 
     for (const id of trail) {
