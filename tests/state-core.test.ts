@@ -66,6 +66,8 @@ import {
   deserializeState,
   tryDeserializeDoc,
   tryDeserializeState,
+  validateSerializedDoc,
+  validateSerializedState,
   mergeDoc,
   MergeError,
   mergeState,
@@ -2056,6 +2058,109 @@ describe("serialization", () => {
     if (result.error instanceof DeserializeError) {
       expect(result.error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
       expect(result.error.path).toBe("/root/elems/A:1/id");
+    }
+  });
+
+  it("offers public validation for unsupported serialized envelope versions", () => {
+    const malformedDoc = {
+      version: 999,
+      root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+    } as unknown as SerializedDoc;
+
+    const docResult = validateSerializedDoc(malformedDoc);
+    expect(docResult.ok).toBeFalse();
+    if (docResult.ok) {
+      throw new Error("Expected validateSerializedDoc to fail");
+    }
+
+    expect(docResult.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+    expect(docResult.error).toBeInstanceOf(DeserializeError);
+    if (docResult.error instanceof DeserializeError) {
+      expect(docResult.error.path).toBe("/version");
+    }
+
+    const malformedState = {
+      version: 999,
+      doc: { version: 1, root: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } } },
+      clock: { actor: "A", ctr: 1 },
+    } as unknown;
+
+    const stateResult = validateSerializedState(malformedState as never);
+    expect(stateResult.ok).toBeFalse();
+    if (stateResult.ok) {
+      throw new Error("Expected validateSerializedState to fail");
+    }
+
+    expect(stateResult.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+    expect(stateResult.error).toBeInstanceOf(DeserializeError);
+    if (stateResult.error instanceof DeserializeError) {
+      expect(stateResult.error.path).toBe("/version");
+    }
+  });
+
+  it("offers public validation for invalid RGA predecessor graphs", () => {
+    const malformed = {
+      root: {
+        kind: "seq",
+        elems: {
+          "A:1": {
+            id: "A:1",
+            prev: "A:2",
+            tombstone: false,
+            value: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            insDot: { actor: "A", ctr: 1 },
+          },
+          "A:2": {
+            id: "A:2",
+            prev: "A:1",
+            tombstone: false,
+            value: { kind: "lww", value: 2, dot: { actor: "A", ctr: 2 } },
+            insDot: { actor: "A", ctr: 2 },
+          },
+        },
+      },
+    } as unknown as SerializedDoc;
+
+    const result = validateSerializedDoc(malformed);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected validateSerializedDoc to fail");
+    }
+
+    expect(result.error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    if (result.error instanceof DeserializeError) {
+      expect(result.error.path).toBe("/root/elems/A:1/prev");
+    }
+  });
+
+  it("validates unsafe serialized keys without mutating prototypes", () => {
+    const marker = "__json_patch_to_crdt_validate_serialized_marker__";
+    const prototypeRecord = Object.prototype as Record<string, unknown>;
+    delete prototypeRecord[marker];
+
+    const malformed = JSON.parse(`{
+      "root": {
+        "kind": "obj",
+        "entries": {
+          "__proto__": {
+            "node": {
+              "kind": "lww",
+              "value": { "${marker}": true },
+              "dot": { "actor": "A", "ctr": 1 }
+            },
+            "dot": { "actor": "A", "ctr": 1 }
+          }
+        },
+        "tombstone": {}
+      }
+    }`) as SerializedDoc;
+
+    try {
+      expect(validateSerializedDoc(malformed)).toEqual({ ok: true });
+      expect(prototypeRecord[marker]).toBeUndefined();
+    } finally {
+      delete prototypeRecord[marker];
     }
   });
 

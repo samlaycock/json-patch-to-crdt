@@ -53,7 +53,12 @@ export { compactDocTombstones, compactStateTombstones } from "./compact";
 export { mergeDoc, tryMergeDoc } from "./merge";
 
 // Low-level document serialization helpers.
-export { serializeDoc, deserializeDoc, tryDeserializeDoc } from "./serialize";
+export {
+  serializeDoc,
+  deserializeDoc,
+  tryDeserializeDoc,
+  validateSerializedDoc,
+} from "./serialize";
 
 // Internals-only types.
 export type {
@@ -91,6 +96,8 @@ export type {
   TombstoneCompactionOptions,
   TombstoneCompactionStats,
   TryDeserializeDocResult,
+  ValidateSerializedDocResult,
+  ValidateSerializedStateResult,
   TryMergeDocResult,
   VersionVector,
 } from "./types";

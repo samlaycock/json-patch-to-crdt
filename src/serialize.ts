@@ -14,6 +14,8 @@ import type {
   SerializedState,
   TryDeserializeDocResult,
   TryDeserializeStateResult,
+  ValidateSerializedDocResult,
+  ValidateSerializedStateResult,
   VersionVector,
 } from "./types";
 
@@ -116,6 +118,19 @@ export function tryDeserializeDoc(
   }
 }
 
+/** Validate a serialized CRDT document without throwing or returning runtime state. */
+export function validateSerializedDoc(
+  data: SerializedDoc,
+  options: DeserializeOptions = {},
+): ValidateSerializedDocResult {
+  const result = tryDeserializeDoc(data, options);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  return { ok: true };
+}
+
 /** Serialize a full CRDT state (document + clock) to a JSON-safe representation. */
 export function serializeState(state: CrdtState): SerializedState {
   return {
@@ -179,6 +194,19 @@ export function tryDeserializeState(
 
     throw error;
   }
+}
+
+/** Validate a serialized CRDT state without throwing or returning runtime state. */
+export function validateSerializedState(
+  data: SerializedState,
+  options: DeserializeOptions = {},
+): ValidateSerializedStateResult {
+  const result = tryDeserializeState(data, options);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  return { ok: true };
 }
 
 function serializeNode(node: Doc["root"]): SerializedNode {
