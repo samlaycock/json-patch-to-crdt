@@ -33,6 +33,8 @@ export type {
   TryApplyPatchInPlaceResult,
   TryApplyPatchResult,
   TryDeserializeStateResult,
+  ValidateSerializedDocResult,
+  ValidateSerializedStateResult,
   TryMergeStateResult,
   ValidatePatchResult,
 } from "./types";
@@ -86,8 +88,13 @@ export {
 // Serialization
 export {
   DeserializeError,
+  serializeDoc,
   serializeState,
+  validateSerializedDoc,
+  validateSerializedState,
+  deserializeDoc,
   deserializeState,
+  tryDeserializeDoc,
   tryDeserializeState,
 } from "./serialize";
 

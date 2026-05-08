@@ -336,6 +336,12 @@ export type TryDeserializeStateResult =
   | { ok: true; state: CrdtState }
   | { ok: false; error: DeserializeFailure };
 
+/** Non-throwing validation-only result for serialized docs. */
+export type ValidateSerializedDocResult = { ok: true } | { ok: false; error: DeserializeFailure };
+
+/** Non-throwing validation-only result for serialized states. */
+export type ValidateSerializedStateResult = { ok: true } | { ok: false; error: DeserializeFailure };
+
 /** How JSON Patch operations are interpreted during application. */
 export type PatchSemantics = "base" | "sequential";
 

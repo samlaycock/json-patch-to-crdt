@@ -151,11 +151,17 @@ import {
   createState,
   deserializeState,
   serializeState,
+  validateSerializedState,
   toJson,
 } from "json-patch-to-crdt";
 
 const state = createState({ counter: 1 }, { actor: "A" });
 const saved = serializeState(state);
+
+const validation = validateSerializedState(saved);
+if (!validation.ok) {
+  throw new Error(`Invalid snapshot at ${validation.error.path}: ${validation.error.message}`);
+}
 
 const restored = deserializeState(saved);
 const next = applyPatch(restored, [{ op: "replace", path: "/counter", value: 2 }]);
@@ -168,10 +174,14 @@ Persisted snapshot compatibility:
 
 - `serializeState(...)` emits a versioned envelope.
 - `deserializeState(...)` accepts both the current versioned format and legacy unversioned snapshots.
+- `validateSerializedState(...)` and `validateSerializedDoc(...)` preflight serialized payloads and return typed failures without requiring callers to catch exceptions.
 - Future envelope versions are rejected until an explicit migration path is added.
 
 The same compatibility contract applies to the lower-level `serializeDoc(...)` and
-`deserializeDoc(...)` helpers exported from `json-patch-to-crdt/internals`.
+`deserializeDoc(...)` helpers. Use the validation-only helpers at trust boundaries
+when you need to reject malformed snapshots before restoring runtime state; use
+`deserializeState(...)` or `deserializeDoc(...)` after validation passes when you
+need the CRDT data structures.
 
 ### Resource Budgets for Serialized Payloads
 
@@ -350,6 +360,7 @@ Main exports most apps need:
 - `diffJsonPatch(baseJson, nextJson, options?)`
 - `diffSafeJsonPatch(baseJson, nextJson, options?)` / `diffNormalizedJsonPatch(baseJson, nextJson, options?)`
 - `serializeState(state)` / `deserializeState(payload)`
+- `validateSerializedState(payload)` / `validateSerializedDoc(payload)`
 - `validateJsonPatch(baseJson, patch, options?)`
 
 Advanced/internal helpers are available from:
