@@ -1,5 +1,44 @@
 # json-patch-to-crdt
 
+## 1.0.0
+
+### Major Changes
+
+- 6ae24f6: Add named strict and legacy parent-semantics profiles for RFC 6902 array inserts.
+
+  `withStrictRfc6902Parents(...)` and `strictRfc6902PatchOptions` make missing array
+  parents fail explicitly, while `withLegacyMissingArrayParents(...)` keeps the
+  deprecated auto-create behavior available as an opt-in compatibility path.
+
+### Minor Changes
+
+- b68fafd: Cap `arrayStrategy: "lcs-linear"` work by default using the existing 250,000-cell unmatched-window budget.
+
+  Callers that need the previous unbounded traversal can now opt out explicitly with
+  `lcsLinearMaxCells: Number.POSITIVE_INFINITY`.
+
+- c2e03eb: Add optional AbortSignal-compatible cancellation support to expensive diff, patch, merge, and deserialize APIs.
+- 13d382a: Expose public validation-only helpers for serialized CRDT docs and states.
+
+  The new `validateSerializedDoc` and `validateSerializedState` APIs return typed validation failures without requiring callers to catch deserialization exceptions.
+
+- 3d789ae: Add safe-by-default runtime JSON validation helpers for state creation, patch application, and JSON Patch diffs.
+
+  The new `Safe` helpers use strict validation, while the new `Normalized` helpers coerce invalid runtime values into JSON-safe output. Existing APIs keep their backward-compatible `jsonValidation: "none"` default.
+
+- 66983ee: Add configurable resource budgets across patch, diff, merge, and deserialize APIs.
+
+  This introduces shared resource-budget options and typed budget-exhaustion failures so
+  callers handling untrusted input can cap patch program length, breadth-oriented object
+  and sequence traversal, serialized payload inspection, and array diff work.
+
+### Patch Changes
+
+- 426fa4c: Count serialized object tombstones against deserialization resource budgets and document recommended serialized payload guardrails.
+- b18399a: Add a dedicated CI performance gate for array diffing, merge traversal, and sequential patch application hot paths.
+- 50582bb: Optimize deep merge lineage checks by reusing path buffers and streaming shared object-key traversal.
+- 438addc: Track observed version vectors incrementally for created, cloned, patched, and deserialized CRDT documents so stale-counter recovery no longer needs to rescan cached document trees.
+
 ## 0.5.0
 
 ### Minor Changes
