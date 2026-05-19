@@ -32,7 +32,7 @@ import {
 } from "./cancellation";
 import { createClock } from "./clock";
 import { TraversalDepthError, assertTraversalDepth } from "./depth";
-import { dotToElemId } from "./dot";
+import { compareDot, dotToElemId } from "./dot";
 import {
   observeVersionVectorDot,
   readCachedObservedVersionVector,
@@ -371,6 +371,7 @@ function deserializeNode(
       const entryPath = `${path}/entries/${k}`;
       const entryRaw = asRecord(v, entryPath);
       const dot = readDot(entryRaw.dot, `${entryPath}/dot`);
+      assertObjectEntryNotShadowedByTombstone(dot, tombstoneRaw, k, entryPath);
       if (observed) {
         observeVersionVectorDot(observed, dot);
       }
@@ -537,7 +538,8 @@ function validateSerializedNode(
       throwIfAborted(signal);
       const entryPath = `${path}/entries/${k}`;
       const entryRaw = asRecord(v, entryPath);
-      readDot(entryRaw.dot, `${entryPath}/dot`);
+      const dot = readDot(entryRaw.dot, `${entryPath}/dot`);
+      assertObjectEntryNotShadowedByTombstone(dot, tombstoneRaw, k, entryPath);
       validateSerializedNode(entryRaw.node, `${entryPath}/node`, depth + 1, budgetMeter, signal);
     }
 
@@ -619,6 +621,28 @@ function validateSerializedNode(
   }
 
   assertAcyclicSerializedRgaPredecessors(predecessors, path);
+}
+
+function assertObjectEntryNotShadowedByTombstone(
+  entryDot: Dot,
+  tombstoneRaw: Record<string, unknown>,
+  key: string,
+  entryPath: string,
+): void {
+  if (!Object.hasOwn(tombstoneRaw, key)) {
+    return;
+  }
+
+  const tombstonePath = entryPath.replace("/entries/", "/tombstone/");
+  const tombstoneValue = tombstoneRaw[key];
+  const tombstoneDot = readDot(tombstoneValue, tombstonePath);
+  if (compareDot(tombstoneDot, entryDot) >= 0) {
+    fail(
+      "INVALID_SERIALIZED_INVARIANT",
+      `${entryPath}/dot`,
+      "object entry dot must be newer than its tombstone dot",
+    );
+  }
 }
 
 function assertAcyclicRgaPredecessors(elems: Map<string, RgaElem>, path: string): void {

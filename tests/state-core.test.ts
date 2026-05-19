@@ -1921,6 +1921,110 @@ describe("serialization", () => {
     expect(next.clock.ctr).toBe(5);
   });
 
+  it("rejects object entries shadowed by newer tombstones during deserialization", () => {
+    const malformed = {
+      version: 1,
+      root: {
+        kind: "obj",
+        entries: {
+          x: {
+            node: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            dot: { actor: "A", ctr: 1 },
+          },
+        },
+        tombstone: { x: { actor: "A", ctr: 2 } },
+      },
+    } as unknown as SerializedDoc;
+
+    try {
+      deserializeDoc(malformed);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeserializeError);
+      if (error instanceof DeserializeError) {
+        expect(error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+        expect(error.path).toBe("/root/entries/x/dot");
+      }
+      return;
+    }
+
+    throw new Error("Expected deserializeDoc to reject shadowed object entries");
+  });
+
+  it("rejects object entries shadowed by equal tombstones during deserialization", () => {
+    const malformed = {
+      version: 1,
+      root: {
+        kind: "obj",
+        entries: {
+          x: {
+            node: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            dot: { actor: "A", ctr: 1 },
+          },
+        },
+        tombstone: { x: { actor: "A", ctr: 1 } },
+      },
+    } as unknown as SerializedDoc;
+
+    const result = tryDeserializeDoc(malformed);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected tryDeserializeDoc to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    if (result.error instanceof DeserializeError) {
+      expect(result.error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+      expect(result.error.path).toBe("/root/entries/x/dot");
+    }
+  });
+
+  it("validates object tombstone conflicts without exposing shadowed entries", () => {
+    const malformed = {
+      version: 1,
+      root: {
+        kind: "obj",
+        entries: {
+          x: {
+            node: { kind: "lww", value: 1, dot: { actor: "A", ctr: 1 } },
+            dot: { actor: "A", ctr: 1 },
+          },
+        },
+        tombstone: { x: { actor: "A", ctr: 2 } },
+      },
+    } as unknown as SerializedDoc;
+
+    const result = validateSerializedDoc(malformed);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected validateSerializedDoc to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    if (result.error instanceof DeserializeError) {
+      expect(result.error.reason).toBe("INVALID_SERIALIZED_INVARIANT");
+      expect(result.error.path).toBe("/root/entries/x/dot");
+    }
+  });
+
+  it("accepts object entries that resurrect older tombstones", () => {
+    const payload = {
+      version: 1,
+      root: {
+        kind: "obj",
+        entries: {
+          x: {
+            node: { kind: "lww", value: 1, dot: { actor: "A", ctr: 2 } },
+            dot: { actor: "A", ctr: 2 },
+          },
+        },
+        tombstone: { x: { actor: "A", ctr: 1 } },
+      },
+    } as unknown as SerializedDoc;
+
+    expect(validateSerializedDoc(payload)).toEqual({ ok: true });
+    expect(materialize(deserializeDoc(payload).root)).toEqual({ x: 1 });
+  });
+
   it("rejects sequence elements whose key does not match element id", () => {
     const malformed = {
       root: {
