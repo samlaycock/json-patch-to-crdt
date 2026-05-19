@@ -62,6 +62,7 @@ import {
   tryMergeDoc,
   tryMergeState,
   toJson,
+  withLegacyMissingArrayParents,
   vvHasDot,
   vvMerge,
   type Dot,
@@ -601,6 +602,36 @@ describe("mergeState", () => {
       expect(toJson(mergeState(replacement, peer, { actor: "A" }))).toEqual(expected);
       expect(toJson(mergeState(peer, replacement, { actor: "B" }))).toEqual(expected);
     }
+  });
+
+  it("keeps peer entries when legacy array parent creation builds structural containers", () => {
+    const origin = docFromJsonWithDot({}, dot("O", 1));
+    const legacyArrayInsert = cloneDoc(origin);
+    const peerObjectWrite = cloneDoc(origin);
+
+    const insertResult = applyIntentsToCrdt(
+      origin,
+      legacyArrayInsert,
+      [{ t: "ArrInsert", path: ["a", "b"], index: 0, value: "x" }],
+      newDotGen("A", 10),
+      "head",
+      undefined,
+      withLegacyMissingArrayParents(),
+    );
+    expect(insertResult).toEqual({ ok: true });
+
+    const objectResult = applyIntentsToCrdt(
+      origin,
+      peerObjectWrite,
+      [{ t: "ObjSet", path: [], key: "a", value: { c: 1 } }],
+      newDotGen("B", 1),
+      "head",
+    );
+    expect(objectResult).toEqual({ ok: true });
+
+    const merged = mergeDoc(legacyArrayInsert, peerObjectWrite);
+
+    expect(materialize(merged.root)).toEqual({ a: { b: ["x"], c: 1 } });
   });
 
   it("merges two states and keeps the local actor by default", () => {
