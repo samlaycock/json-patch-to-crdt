@@ -393,6 +393,22 @@ function applyPatchOpSequential(
   session: SequentialApplySession,
 ): ApplyResult {
   if (op.op === "move") {
+    const movePaths = parseMovePointerPaths(op, opIndex, session.pointerCache);
+    if (!movePaths.ok) {
+      return movePaths;
+    }
+
+    if (isStrictDescendantPath(movePaths.fromPath, movePaths.toPath)) {
+      return {
+        ok: false,
+        code: 409,
+        reason: "INVALID_MOVE",
+        message: `cannot move a value into one of its descendants at ${op.path}`,
+        path: op.path,
+        opIndex,
+      };
+    }
+
     const fromResolved = resolveValueAtPointerInDoc(
       baseDoc,
       op.from,
@@ -401,6 +417,10 @@ function applyPatchOpSequential(
     );
     if (!fromResolved.ok) {
       return fromResolved;
+    }
+
+    if (isSamePath(movePaths.fromPath, movePaths.toPath)) {
+      return { ok: true };
     }
 
     const fromValue = structuredClone(fromResolved.value);
@@ -497,6 +517,36 @@ function applyPatchOpSequential(
     opIndex,
     session,
   );
+}
+
+function parseMovePointerPaths(
+  op: Extract<JsonPatchOp, { op: "move" }>,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): { ok: true; fromPath: string[]; toPath: string[] } | ApplyError {
+  const fromPath = parseMovePointerPath(op.from, opIndex, pointerCache);
+  if (!fromPath.ok) {
+    return fromPath;
+  }
+
+  const toPath = parseMovePointerPath(op.path, opIndex, pointerCache);
+  if (!toPath.ok) {
+    return toPath;
+  }
+
+  return { ok: true, fromPath: fromPath.path, toPath: toPath.path };
+}
+
+function parseMovePointerPath(
+  pointer: string,
+  opIndex: number,
+  pointerCache: Map<string, string[]>,
+): { ok: true; path: string[] } | ApplyError {
+  try {
+    return { ok: true, path: parsePointerWithCache(pointer, pointerCache) };
+  } catch (error) {
+    return toPointerParseApplyError(error, pointer, opIndex);
+  }
 }
 
 function applySinglePatchOpSequentialStep(
@@ -1106,4 +1156,32 @@ function toPointerParseApplyError(error: unknown, pointer: string, opIndex: numb
     path: pointer,
     opIndex,
   };
+}
+
+function isStrictDescendantPath(from: string[], to: string[]): boolean {
+  if (to.length <= from.length) {
+    return false;
+  }
+
+  for (let i = 0; i < from.length; i++) {
+    if (from[i] !== to[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isSamePath(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+
+  return true;
 }
