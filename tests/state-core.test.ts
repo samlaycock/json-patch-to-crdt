@@ -787,6 +787,50 @@ describe("clock and state", () => {
     expect(toJson(next)).toEqual(["c", "a", "b"]);
   });
 
+  it("rejects sequential descendant moves before mutating", () => {
+    const state = createState({ a: { b: 1 } }, { actor: "A" });
+    const before = serializeState(state);
+    const result = tryApplyPatch(state, [{ op: "move", from: "/a", path: "/a/b/c" }], {
+      semantics: "sequential",
+    });
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("INVALID_MOVE");
+      expect(result.error.path).toBe("/a/b/c");
+      expect(result.error.opIndex).toBe(0);
+    }
+    expect(serializeState(state)).toEqual(before);
+    expect(toJson(state)).toEqual({ a: { b: 1 } });
+  });
+
+  it("treats sequential self-move as a true no-op after validating the source", () => {
+    const state = createState({ a: { b: 1 } }, { actor: "A" });
+    const before = serializeState(state);
+    const next = applyPatch(state, [{ op: "move", from: "/a", path: "/a" }], {
+      semantics: "sequential",
+    });
+
+    expect(serializeState(next)).toEqual(before);
+    expect(next.clock.ctr).toBe(state.clock.ctr);
+    expect(observedVersionVector(next)).toEqual(observedVersionVector(state));
+    expect(toJson(next)).toEqual({ a: { b: 1 } });
+  });
+
+  it("rejects sequential self-move when the source is missing", () => {
+    const state = createState({ a: 1 }, { actor: "A" });
+    const result = tryApplyPatch(state, [{ op: "move", from: "/missing", path: "/missing" }], {
+      semantics: "sequential",
+    });
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("MISSING_PARENT");
+      expect(result.error.path).toBe("/missing");
+      expect(result.error.opIndex).toBe(0);
+    }
+  });
+
   it("supports mixing sequential semantics with an explicit base state", () => {
     const base = createState({ list: [1, 2] }, { actor: "A" });
     const head = applyPatch(base, [{ op: "add", path: "/list/1", value: 9 }], {
