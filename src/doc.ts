@@ -107,7 +107,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 
   if (path.length === 0) {
     if (head.root.kind !== "seq") {
-      head.root = newSeq(dotForCreate);
+      head.root = newSeq();
     }
     return head.root as RgaSeq;
   }
@@ -116,7 +116,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
     const seg = path[i]!;
 
     if (cur.kind !== "obj") {
-      const replacement = newObj(dotForCreate);
+      const replacement = newObj();
 
       if (parent && parentKey !== null) {
         objSet(parent, parentKey, replacement, dotForCreate);
@@ -132,7 +132,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 
     if (i === path.length - 1) {
       if (!ent || ent.node.kind !== "seq") {
-        const seq = newSeq(dotForCreate);
+        const seq = newSeq();
         objSet(obj, seg, seq, dotForCreate);
         return seq;
       }
@@ -141,7 +141,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
     }
 
     if (!ent || ent.node.kind !== "obj") {
-      const child = newObj(dotForCreate);
+      const child = newObj();
       objSet(obj, seg, child, dotForCreate);
       parent = obj;
       parentKey = seg;
@@ -155,7 +155,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 
   // Unreachable, but TypeScript needs a return.
   if (head.root.kind !== "seq") {
-    head.root = newSeq(dotForCreate);
+    head.root = newSeq();
   }
 
   return head.root as RgaSeq;
@@ -276,6 +276,12 @@ function deepNodeFromJsonWithDepth(value: JsonValue, dot: Dot, depth: number): N
   return obj;
 }
 
+/**
+ * Convert JSON into a node whose root is represented by `rootDot`.
+ *
+ * Callers that already allocated a mutation dot must pass it explicitly so the
+ * document state represents that event without consuming an extra clock tick.
+ */
 function nodeFromJson(value: JsonValue, nextDot: () => Dot, rootDot = nextDot()): Node {
   if (isJsonPrimitive(value)) {
     return newReg(value, rootDot);
