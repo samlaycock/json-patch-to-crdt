@@ -258,7 +258,12 @@ function serializeNode(node: Doc["root"]): SerializedNode {
       setSerializedRecordValue(tombstone, k, { actor: d.actor, ctr: d.ctr });
     }
 
-    return { kind: "obj", entries, tombstone };
+    return {
+      kind: "obj",
+      dot: node.dot ? { actor: node.dot.actor, ctr: node.dot.ctr } : undefined,
+      entries,
+      tombstone,
+    };
   }
 
   const elems = createSerializedRecord<SerializedRgaElem>();
@@ -277,7 +282,11 @@ function serializeNode(node: Doc["root"]): SerializedNode {
     setSerializedRecordValue(elems, id, serializedElem);
   }
 
-  return { kind: "seq", elems };
+  return {
+    kind: "seq",
+    dot: node.dot ? { actor: node.dot.actor, ctr: node.dot.ctr } : undefined,
+    elems,
+  };
 }
 
 function readSerializedDocEnvelope(data: SerializedDoc): Record<string, unknown> {
@@ -344,6 +353,11 @@ function deserializeNode(
   }
 
   if (kind === "obj") {
+    const containerDot =
+      "dot" in raw && raw.dot !== undefined ? readDot(raw.dot, `${path}/dot`) : undefined;
+    if (observed && containerDot) {
+      observeVersionVectorDot(observed, containerDot);
+    }
     const entriesRaw = asRecord(raw.entries, `${path}/entries`);
     const tombstoneRaw = asRecord(raw.tombstone, `${path}/tombstone`);
     budgetMeter?.count("objectEntries", Object.keys(entriesRaw).length, `${path}/entries`);
@@ -383,13 +397,18 @@ function deserializeNode(
       tombstone.set(k, dot);
     }
 
-    return { kind: "obj", entries, tombstone };
+    return { kind: "obj", dot: containerDot, entries, tombstone };
   }
 
   if (kind !== "seq") {
     fail("INVALID_SERIALIZED_SHAPE", `${path}/kind`, `unsupported node kind '${kind}'`);
   }
 
+  const containerDot =
+    "dot" in raw && raw.dot !== undefined ? readDot(raw.dot, `${path}/dot`) : undefined;
+  if (observed && containerDot) {
+    observeVersionVectorDot(observed, containerDot);
+  }
   const elemsRaw = asRecord(raw.elems, `${path}/elems`);
   budgetMeter?.count("sequenceElements", Object.keys(elemsRaw).length, `${path}/elems`);
   budgetMeter?.count("serializedElements", Object.keys(elemsRaw).length, `${path}/elems`);
@@ -474,7 +493,7 @@ function deserializeNode(
 
   assertAcyclicRgaPredecessors(elems, path);
 
-  return { kind: "seq", elems };
+  return { kind: "seq", dot: containerDot, elems };
 }
 
 function validateSerializedNode(
@@ -504,6 +523,9 @@ function validateSerializedNode(
   }
 
   if (kind === "obj") {
+    if ("dot" in raw && raw.dot !== undefined) {
+      readDot(raw.dot, `${path}/dot`);
+    }
     const entriesRaw = asRecord(raw.entries, `${path}/entries`);
     const tombstoneRaw = asRecord(raw.tombstone, `${path}/tombstone`);
     budgetMeter?.count("objectEntries", Object.keys(entriesRaw).length, `${path}/entries`);
@@ -531,6 +553,9 @@ function validateSerializedNode(
     fail("INVALID_SERIALIZED_SHAPE", `${path}/kind`, `unsupported node kind '${kind}'`);
   }
 
+  if ("dot" in raw && raw.dot !== undefined) {
+    readDot(raw.dot, `${path}/dot`);
+  }
   const elemsRaw = asRecord(raw.elems, `${path}/elems`);
   budgetMeter?.count("sequenceElements", Object.keys(elemsRaw).length, `${path}/elems`);
   budgetMeter?.count("serializedElements", Object.keys(elemsRaw).length, `${path}/elems`);

@@ -107,7 +107,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 
   if (path.length === 0) {
     if (head.root.kind !== "seq") {
-      head.root = newSeq();
+      head.root = newSeq(dotForCreate);
     }
     return head.root as RgaSeq;
   }
@@ -116,7 +116,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
     const seg = path[i]!;
 
     if (cur.kind !== "obj") {
-      const replacement = newObj();
+      const replacement = newObj(dotForCreate);
 
       if (parent && parentKey !== null) {
         objSet(parent, parentKey, replacement, dotForCreate);
@@ -132,7 +132,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 
     if (i === path.length - 1) {
       if (!ent || ent.node.kind !== "seq") {
-        const seq = newSeq();
+        const seq = newSeq(dotForCreate);
         objSet(obj, seg, seq, dotForCreate);
         return seq;
       }
@@ -141,7 +141,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
     }
 
     if (!ent || ent.node.kind !== "obj") {
-      const child = newObj();
+      const child = newObj(dotForCreate);
       objSet(obj, seg, child, dotForCreate);
       parent = obj;
       parentKey = seg;
@@ -155,7 +155,7 @@ function ensureSeqAtPath(head: Doc, path: string[], dotForCreate: Dot): RgaSeq {
 
   // Unreachable, but TypeScript needs a return.
   if (head.root.kind !== "seq") {
-    head.root = newSeq();
+    head.root = newSeq(dotForCreate);
   }
 
   return head.root as RgaSeq;
@@ -256,7 +256,7 @@ function deepNodeFromJsonWithDepth(value: JsonValue, dot: Dot, depth: number): N
     return newReg(value, dot);
   }
   if (Array.isArray(value)) {
-    const seq = newSeq();
+    const seq = newSeq(dot);
     let prev = HEAD;
     // insert in order with synthetic dots derived from dot (not great). In production use fresh dots per element.
     // For now, keep it simple: all children get the same dot ordering via ctr offset.
@@ -269,19 +269,19 @@ function deepNodeFromJsonWithDepth(value: JsonValue, dot: Dot, depth: number): N
     }
     return seq;
   }
-  const obj = newObj();
+  const obj = newObj(dot);
   for (const [k, v] of Object.entries(value)) {
     objSet(obj, k, deepNodeFromJsonWithDepth(v, dot, depth + 1), dot);
   }
   return obj;
 }
 
-function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
+function nodeFromJson(value: JsonValue, nextDot: () => Dot, rootDot = nextDot()): Node {
   if (isJsonPrimitive(value)) {
-    return newReg(value, nextDot());
+    return newReg(value, rootDot);
   }
 
-  const root = Array.isArray(value) ? newSeq() : newObj();
+  const root = Array.isArray(value) ? newSeq(rootDot) : newObj(rootDot);
   type ObjFrame = {
     kind: "obj";
     depth: number;
@@ -333,12 +333,12 @@ function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
 
       const entryDot = nextDot();
       if (isJsonPrimitive(childValue)) {
-        objSet(frame.target, key, newReg(childValue, nextDot()), entryDot);
+        objSet(frame.target, key, newReg(childValue, entryDot), entryDot);
         continue;
       }
 
       if (Array.isArray(childValue)) {
-        const childSeq = newSeq();
+        const childSeq = newSeq(entryDot);
         objSet(frame.target, key, childSeq, entryDot);
         stack.push({
           kind: "seq",
@@ -351,7 +351,7 @@ function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
         continue;
       }
 
-      const childObj = newObj();
+      const childObj = newObj(entryDot);
       objSet(frame.target, key, childObj, entryDot);
       stack.push({
         kind: "obj",
@@ -376,13 +376,13 @@ function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
     const id = dotToElemId(insDot);
 
     if (isJsonPrimitive(childValue)) {
-      rgaInsertAfter(frame.target, frame.prev, id, insDot, newReg(childValue, nextDot()));
+      rgaInsertAfter(frame.target, frame.prev, id, insDot, newReg(childValue, insDot));
       frame.prev = id;
       continue;
     }
 
     if (Array.isArray(childValue)) {
-      const childSeq = newSeq();
+      const childSeq = newSeq(insDot);
       rgaInsertAfter(frame.target, frame.prev, id, insDot, childSeq);
       frame.prev = id;
       stack.push({
@@ -396,7 +396,7 @@ function nodeFromJson(value: JsonValue, nextDot: () => Dot): Node {
       continue;
     }
 
-    const childObj = newObj();
+    const childObj = newObj(insDot);
     rgaInsertAfter(frame.target, frame.prev, id, insDot, childObj);
     frame.prev = id;
     stack.push({
@@ -451,6 +451,7 @@ function cloneNodeAtDepth(node: Node, depth: number): Node {
 
     return {
       kind: "obj",
+      dot: node.dot ? { actor: node.dot.actor, ctr: node.dot.ctr } : undefined,
       entries,
       tombstone,
     };
@@ -468,7 +469,11 @@ function cloneNodeAtDepth(node: Node, depth: number): Node {
     });
   }
 
-  return { kind: "seq", elems };
+  return {
+    kind: "seq",
+    dot: node.dot ? { actor: node.dot.actor, ctr: node.dot.ctr } : undefined,
+    elems,
+  };
 }
 
 function isJsonPrimitive(value: JsonValue): value is null | string | number | boolean {
@@ -643,7 +648,7 @@ function applyObjSet(
 
   const d = newDot();
   const parentObj = parentRes.obj;
-  objSet(parentObj, it.key, nodeFromJson(it.value, newDot), d);
+  objSet(parentObj, it.key, nodeFromJson(it.value, newDot, d), d);
   return null;
 }
 
@@ -734,7 +739,7 @@ function applyArrInsert(
 
       const d = dotRes.dot;
       const id = dotToElemId(d);
-      rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot));
+      rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot, d));
       return null;
     }
 
@@ -775,7 +780,7 @@ function applyArrInsert(
 
   const d = dotRes.dot;
   const id = dotToElemId(d);
-  rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot));
+  rgaInsertAfter(headSeq, prev, id, d, nodeFromJson(it.value, newDot, d));
   if (baseSeq === headSeq) {
     baseIndex.insertAt(idx, id);
   }
@@ -927,7 +932,7 @@ function applyArrReplace(
     };
   }
 
-  e.value = nodeFromJson(it.value, newDot);
+  e.value = nodeFromJson(it.value, newDot, _d);
 
   return null;
 }

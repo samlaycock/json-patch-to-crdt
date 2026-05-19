@@ -68,6 +68,8 @@ export type RgaElem = {
 /** Replicated Growable Array: an ordered sequence CRDT with tombstones. */
 export type RgaSeq = {
   kind: "seq";
+  /** Dot for the event that created or replaced this container node. */
+  dot?: Dot;
   elems: Map<ElemId, RgaElem>;
 };
 
@@ -79,6 +81,8 @@ export type ObjEntry = { node: Node; dot: Dot };
 /** Delete-wins object CRDT: a map of string keys to child nodes. */
 export type ObjNode = {
   kind: "obj";
+  /** Dot for the event that created or replaced this container node. */
+  dot?: Dot;
   entries: Map<string, ObjEntry>;
   /** Latest delete dot per key (delete-wins semantics). */
   tombstone: Map<string, Dot>;
@@ -106,10 +110,11 @@ export type SerializedNode =
   | { kind: "lww"; value: JsonValue; dot: Dot }
   | {
       kind: "obj";
+      dot?: Dot;
       entries: Record<string, { node: SerializedNode; dot: Dot }>;
       tombstone: Record<string, Dot>;
     }
-  | { kind: "seq"; elems: Record<string, SerializedRgaElem> };
+  | { kind: "seq"; dot?: Dot; elems: Record<string, SerializedRgaElem> };
 
 /** Versioned JSON-serializable form of a CRDT document. */
 export interface SerializedDocV1 {
