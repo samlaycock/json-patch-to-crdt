@@ -398,6 +398,16 @@ function applyPatchOpSequential(
       return movePaths;
     }
 
+    const fromResolved = resolveValueAtPointerInDoc(
+      baseDoc,
+      op.from,
+      opIndex,
+      session.pointerCache,
+    );
+    if (!fromResolved.ok) {
+      return fromResolved;
+    }
+
     if (isStrictDescendantPath(movePaths.fromPath, movePaths.toPath)) {
       return {
         ok: false,
@@ -407,16 +417,6 @@ function applyPatchOpSequential(
         path: op.path,
         opIndex,
       };
-    }
-
-    const fromResolved = resolveValueAtPointerInDoc(
-      baseDoc,
-      op.from,
-      opIndex,
-      session.pointerCache,
-    );
-    if (!fromResolved.ok) {
-      return fromResolved;
     }
 
     if (isSamePath(movePaths.fromPath, movePaths.toPath)) {
