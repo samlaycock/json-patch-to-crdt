@@ -82,6 +82,9 @@ export function observedVersionVector(target: Doc | CrdtState): VersionVector {
     }
 
     if (frame.node.kind === "obj") {
+      if (frame.node.dot) {
+        observeVersionVectorDot(vv, frame.node.dot);
+      }
       for (const entry of frame.node.entries.values()) {
         observeVersionVectorDot(vv, entry.dot);
         stack.push({ node: entry.node, depth: frame.depth + 1 });
@@ -93,6 +96,9 @@ export function observedVersionVector(target: Doc | CrdtState): VersionVector {
       continue;
     }
 
+    if (frame.node.dot) {
+      observeVersionVectorDot(vv, frame.node.dot);
+    }
     for (const elem of frame.node.elems.values()) {
       observeVersionVectorDot(vv, elem.insDot);
       if (elem.delDot) {

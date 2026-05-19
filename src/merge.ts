@@ -370,6 +370,9 @@ function repDot(node: Node, signal?: MergeDocOptions["signal"]): Dot {
         }
         break;
       case "obj":
+        if (frame.node.dot && compareDot(frame.node.dot, best) > 0) {
+          best = frame.node.dot;
+        }
         for (const entry of frame.node.entries.values()) {
           if (compareDot(entry.dot, best) > 0) {
             best = entry.dot;
@@ -384,6 +387,9 @@ function repDot(node: Node, signal?: MergeDocOptions["signal"]): Dot {
         }
         break;
       case "seq":
+        if (frame.node.dot && compareDot(frame.node.dot, best) > 0) {
+          best = frame.node.dot;
+        }
         for (const elem of frame.node.elems.values()) {
           if (compareDot(elem.insDot, best) > 0) {
             best = elem.insDot;
@@ -447,7 +453,10 @@ function mergeObj(
   assertTraversalDepth(depth);
   const entries = new Map<string, { node: Node; dot: Dot }>();
   const tombstone = new Map<string, Dot>();
-  let maxObservedCtr = 0;
+  let maxObservedCtr = maxObservedCtrForDot(
+    compareOptionalDot(a.dot, b.dot) >= 0 ? a.dot : b.dot,
+    config.actor,
+  );
 
   // Merge tombstones: max dot per key.
   const allTombKeys = new Set([...a.tombstone.keys(), ...b.tombstone.keys()]);
@@ -492,10 +501,16 @@ function mergeObj(
       merged = { node: mergedNode.node, dot };
       mergedNodeMaxObservedCtr = mergedNode.maxObservedCtr;
     } else if (ea) {
+      if (b.dot && compareDot(b.dot, ea.dot) >= 0) {
+        continue;
+      }
       const cloned = cloneNodeShallow(ea.node, depth + 1, config.actor, config.signal);
       merged = { node: cloned.node, dot: { ...ea.dot } };
       mergedNodeMaxObservedCtr = cloned.maxObservedCtr;
     } else {
+      if (a.dot && compareDot(a.dot, eb!.dot) >= 0) {
+        continue;
+      }
       const cloned = cloneNodeShallow(eb!.node, depth + 1, config.actor, config.signal);
       merged = { node: cloned.node, dot: { ...eb!.dot } };
       mergedNodeMaxObservedCtr = cloned.maxObservedCtr;
@@ -515,7 +530,8 @@ function mergeObj(
     );
   }
 
-  return { node: { kind: "obj", entries, tombstone }, maxObservedCtr };
+  const dot = mergeOptionalDot(a.dot, b.dot);
+  return { node: { kind: "obj", dot, entries, tombstone }, maxObservedCtr };
 }
 
 function mergeSeq(
@@ -551,7 +567,10 @@ function mergeSeq(
   }
 
   const elems = new Map<string, RgaElem>();
-  let maxObservedCtr = 0;
+  let maxObservedCtr = maxObservedCtrForDot(
+    compareOptionalDot(a.dot, b.dot) >= 0 ? a.dot : b.dot,
+    config.actor,
+  );
 
   // Union by element ID.
   const allIds = new Set([...a.elems.keys(), ...b.elems.keys()]);
@@ -598,17 +617,24 @@ function mergeSeq(
         maxObservedCtrForDot(mergedDeleteDot, config.actor),
       );
     } else if (ea) {
+      if (b.dot && compareDot(b.dot, ea.insDot) >= 0) {
+        continue;
+      }
       const cloned = cloneElem(ea, depth + 1, config.actor, config.signal);
       elems.set(id, cloned.elem);
       maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
     } else {
+      if (a.dot && compareDot(a.dot, eb!.insDot) >= 0) {
+        continue;
+      }
       const cloned = cloneElem(eb!, depth + 1, config.actor, config.signal);
       elems.set(id, cloned.elem);
       maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
     }
   }
 
-  return { node: { kind: "seq", elems }, maxObservedCtr };
+  const dot = mergeOptionalDot(a.dot, b.dot);
+  return { node: { kind: "seq", dot, elems }, maxObservedCtr };
 }
 
 function sameDot(a: Dot, b: Dot): boolean {
@@ -657,6 +683,38 @@ function mergeDeleteDot(a?: Dot, b?: Dot): Dot | undefined {
   return undefined;
 }
 
+function mergeOptionalDot(a?: Dot, b?: Dot): Dot | undefined {
+  if (a && b) {
+    return compareDot(a, b) >= 0 ? { ...a } : { ...b };
+  }
+
+  if (a) {
+    return { ...a };
+  }
+
+  if (b) {
+    return { ...b };
+  }
+
+  return undefined;
+}
+
+function compareOptionalDot(a?: Dot, b?: Dot): number {
+  if (a && b) {
+    return compareDot(a, b);
+  }
+
+  if (a) {
+    return 1;
+  }
+
+  if (b) {
+    return -1;
+  }
+
+  return 0;
+}
+
 function cloneNodeShallow(
   node: Node,
   depth: number,
@@ -673,7 +731,7 @@ function cloneNodeShallow(
       };
     case "obj": {
       const entries = new Map<string, { node: Node; dot: Dot }>();
-      let maxObservedCtr = 0;
+      let maxObservedCtr = maxObservedCtrForDot(node.dot, actor);
       for (const [k, v] of node.entries) {
         throwIfAborted(signal);
         const cloned = cloneNodeShallow(v.node, depth + 1, actor, signal);
@@ -690,18 +748,24 @@ function cloneNodeShallow(
         tombstone.set(k, { ...d });
         maxObservedCtr = Math.max(maxObservedCtr, maxObservedCtrForDot(d, actor));
       }
-      return { node: { kind: "obj", entries, tombstone }, maxObservedCtr };
+      return {
+        node: { kind: "obj", dot: node.dot ? { ...node.dot } : undefined, entries, tombstone },
+        maxObservedCtr,
+      };
     }
     case "seq": {
       const elems = new Map<string, RgaElem>();
-      let maxObservedCtr = 0;
+      let maxObservedCtr = maxObservedCtrForDot(node.dot, actor);
       for (const [id, e] of node.elems) {
         throwIfAborted(signal);
         const cloned = cloneElem(e, depth + 1, actor, signal);
         elems.set(id, cloned.elem);
         maxObservedCtr = Math.max(maxObservedCtr, cloned.maxObservedCtr);
       }
-      return { node: { kind: "seq", elems }, maxObservedCtr };
+      return {
+        node: { kind: "seq", dot: node.dot ? { ...node.dot } : undefined, elems },
+        maxObservedCtr,
+      };
     }
   }
 }

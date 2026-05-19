@@ -213,7 +213,7 @@ describe("dots and version vectors", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(observedVersionVector(doc)).toEqual({ A: 2, B: 10 });
+    expect(observedVersionVector(doc)).toEqual({ A: 1, B: 10 });
   });
 
   it("supports public merge, intersection, and coverage checks for version vectors", () => {
@@ -885,11 +885,11 @@ describe("clock and state", () => {
       throw new Error("Expected list sequence and x entry");
     }
 
-    const deletedElem = listNode.elems.get("A:2");
+    const deletedElem = listNode.elems.get("A:3");
     expect(deletedElem?.delDot).toEqual({ actor: "A", ctr: 4 });
     expect(xEntry.dot).toEqual({ actor: "A", ctr: 5 });
-    expect(resumed.state.clock.ctr).toBe(6);
-    expect(resumed.vv["A"]).toBe(6);
+    expect(resumed.state.clock.ctr).toBe(5);
+    expect(resumed.vv["A"]).toBe(5);
   });
 
   it("exposes a non-throwing applyPatchAsActor helper", () => {
@@ -1858,7 +1858,7 @@ describe("serialization", () => {
     }
 
     expect(next.doc.root.entries.get("x")?.dot).toEqual({ actor: "A", ctr: 5 });
-    expect(next.clock.ctr).toBe(6);
+    expect(next.clock.ctr).toBe(5);
   });
 
   it("rejects sequence elements whose key does not match element id", () => {

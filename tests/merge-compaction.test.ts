@@ -561,6 +561,48 @@ describe("mergeDoc", () => {
 });
 
 describe("mergeState", () => {
+  it("preserves root replacement with empty containers across merge", () => {
+    for (const value of [{}, []] as const) {
+      const origin = createState({ x: 1 }, { actor: "O" });
+      const replacement = applyPatch(forkState(origin, "A"), [{ op: "replace", path: "", value }]);
+      const peer = forkState(origin, "B");
+
+      expect(toJson(replacement)).toEqual(value);
+      expect(toJson(mergeState(replacement, peer, { actor: "A" }))).toEqual(value);
+      expect(toJson(mergeState(peer, replacement, { actor: "B" }))).toEqual(value);
+    }
+  });
+
+  it("preserves object-key replacement with empty containers across merge", () => {
+    for (const value of [{}, []] as const) {
+      const origin = createState({ x: 1 }, { actor: "O" });
+      const replacement = applyPatch(forkState(origin, "A"), [
+        { op: "replace", path: "/x", value },
+      ]);
+      const peer = forkState(origin, "B");
+      const expected = { x: value };
+
+      expect(toJson(replacement)).toEqual(expected);
+      expect(toJson(mergeState(replacement, peer, { actor: "A" }))).toEqual(expected);
+      expect(toJson(mergeState(peer, replacement, { actor: "B" }))).toEqual(expected);
+    }
+  });
+
+  it("preserves array-element replacement with empty containers across merge", () => {
+    for (const value of [{}, []] as const) {
+      const origin = createState({ list: [1] }, { actor: "O" });
+      const replacement = applyPatch(forkState(origin, "A"), [
+        { op: "replace", path: "/list/0", value },
+      ]);
+      const peer = forkState(origin, "B");
+      const expected = { list: [value] };
+
+      expect(toJson(replacement)).toEqual(expected);
+      expect(toJson(mergeState(replacement, peer, { actor: "A" }))).toEqual(expected);
+      expect(toJson(mergeState(peer, replacement, { actor: "B" }))).toEqual(expected);
+    }
+  });
+
   it("merges two states and keeps the local actor by default", () => {
     const a = createState({ x: 1 }, { actor: "A" });
     const b = createState({ y: 2 }, { actor: "B" });
@@ -737,7 +779,7 @@ describe("mergeState", () => {
     }
 
     expect(next.doc.root.entries.get("x")?.dot).toEqual({ actor: "A", ctr: 5 });
-    expect(next.clock.ctr).toBe(6);
+    expect(next.clock.ctr).toBe(5);
   });
 });
 

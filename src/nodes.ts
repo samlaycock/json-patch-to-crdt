@@ -2,12 +2,12 @@ import type { Dot, JsonValue, LwwReg, Node, ObjNode, RgaSeq } from "./types";
 
 import { compareDot } from "./dot";
 
-export function newObj(): ObjNode {
-  return { kind: "obj", entries: new Map(), tombstone: new Map() };
+export function newObj(dot?: Dot): ObjNode {
+  return { kind: "obj", dot, entries: new Map(), tombstone: new Map() };
 }
 
-export function newSeq(): RgaSeq {
-  return { kind: "seq", elems: new Map() };
+export function newSeq(dot?: Dot): RgaSeq {
+  return { kind: "seq", dot, elems: new Map() };
 }
 
 export function newReg(value: JsonValue, dot: Dot): LwwReg {
