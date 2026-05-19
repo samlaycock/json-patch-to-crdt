@@ -804,6 +804,22 @@ describe("clock and state", () => {
     expect(toJson(state)).toEqual({ a: { b: 1 } });
   });
 
+  it("preserves missing-source errors for sequential descendant-shaped moves", () => {
+    const state = createState({ a: 1 }, { actor: "A" });
+    const before = serializeState(state);
+    const result = tryApplyPatch(state, [{ op: "move", from: "/missing", path: "/missing/c" }], {
+      semantics: "sequential",
+    });
+
+    expect(result.ok).toBeFalse();
+    if (!result.ok) {
+      expect(result.error.reason).toBe("MISSING_PARENT");
+      expect(result.error.path).toBe("/missing");
+      expect(result.error.opIndex).toBe(0);
+    }
+    expect(serializeState(state)).toEqual(before);
+  });
+
   it("treats sequential self-move as a true no-op after validating the source", () => {
     const state = createState({ a: { b: 1 } }, { actor: "A" });
     const before = serializeState(state);
