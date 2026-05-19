@@ -589,6 +589,25 @@ describe("mergeState", () => {
     }
   });
 
+  it("resolves two-sided concurrent container replacements by representative dot", () => {
+    const origin = createState({ other: 0, x: 1 }, { actor: "O" });
+    const emptyReplacement = applyPatch(forkState(origin, "Z"), [
+      { op: "replace", path: "/other", value: 1 },
+      { op: "replace", path: "/x", value: {} },
+    ]);
+    const nonEmptyReplacement = applyPatch(forkState(origin, "A"), [
+      { op: "replace", path: "/x", value: { y: 1 } },
+    ]);
+    const expected = { other: 1, x: {} };
+
+    expect(toJson(mergeState(emptyReplacement, nonEmptyReplacement, { actor: "Z" }))).toEqual(
+      expected,
+    );
+    expect(toJson(mergeState(nonEmptyReplacement, emptyReplacement, { actor: "A" }))).toEqual(
+      expected,
+    );
+  });
+
   it("preserves array-element replacement with empty containers across merge", () => {
     for (const value of [{}, []] as const) {
       const origin = createState({ list: [1] }, { actor: "O" });

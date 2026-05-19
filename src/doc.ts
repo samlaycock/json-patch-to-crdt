@@ -57,11 +57,12 @@ import {
  */
 export function docFromJson(value: JsonValue, nextDot: () => Dot): Doc {
   const vv = Object.create(null) as VersionVector;
-  const root = nodeFromJson(value, () => {
+  const observedNextDot = () => {
     const dot = nextDot();
     observeVersionVectorDot(vv, dot);
     return dot;
-  });
+  };
+  const root = nodeFromJson(value, observedNextDot, observedNextDot());
   const doc = { root };
   writeCachedObservedVersionVector(doc, vv);
   return doc;
@@ -278,11 +279,8 @@ function deepNodeFromJsonWithDepth(value: JsonValue, dot: Dot, depth: number): N
 
 /**
  * Convert JSON into a node whose root is represented by `rootDot`.
- *
- * Callers that already allocated a mutation dot must pass it explicitly so the
- * document state represents that event without consuming an extra clock tick.
  */
-function nodeFromJson(value: JsonValue, nextDot: () => Dot, rootDot = nextDot()): Node {
+function nodeFromJson(value: JsonValue, nextDot: () => Dot, rootDot: Dot): Node {
   if (isJsonPrimitive(value)) {
     return newReg(value, rootDot);
   }
@@ -627,7 +625,7 @@ function applyObjSet(
   newDot: () => Dot,
 ): ApplyResult | null {
   if (it.path.length === 0 && it.key === ROOT_KEY) {
-    head.root = nodeFromJson(it.value, newDot);
+    head.root = nodeFromJson(it.value, newDot, newDot());
     return null;
   }
 
