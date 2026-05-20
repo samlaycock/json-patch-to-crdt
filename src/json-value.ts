@@ -192,12 +192,8 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
     return false;
   }
 
-  if (Object.prototype.toString.call(value) !== "[object Object]") {
-    return false;
-  }
-
   const prototype = Object.getPrototypeOf(value);
-  return prototype === null || Object.getPrototypeOf(prototype) === null;
+  return prototype === null || prototype === Object.prototype;
 }
 
 function isNonFiniteNumber(value: unknown): value is number {
