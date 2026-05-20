@@ -2006,6 +2006,43 @@ describe("serialization", () => {
     }
   });
 
+  it("reports nested object tombstone conflict shape errors at the tombstone path", () => {
+    const malformed = {
+      version: 1,
+      root: {
+        kind: "obj",
+        entries: {
+          outer: {
+            node: {
+              kind: "obj",
+              entries: {
+                inner: {
+                  node: { kind: "lww", value: 1, dot: { actor: "A", ctr: 2 } },
+                  dot: { actor: "A", ctr: 2 },
+                },
+              },
+              tombstone: { inner: { actor: 42, ctr: 3 } },
+            },
+            dot: { actor: "A", ctr: 1 },
+          },
+        },
+        tombstone: {},
+      },
+    } as unknown as SerializedDoc;
+
+    const result = validateSerializedDoc(malformed);
+    expect(result.ok).toBeFalse();
+    if (result.ok) {
+      throw new Error("Expected validateSerializedDoc to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    if (result.error instanceof DeserializeError) {
+      expect(result.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+      expect(result.error.path).toBe("/root/entries/outer/node/tombstone/inner/actor");
+    }
+  });
+
   it("accepts object entries that resurrect older tombstones", () => {
     const payload = {
       version: 1,
