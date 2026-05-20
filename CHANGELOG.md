@@ -1,5 +1,14 @@
 # json-patch-to-crdt
 
+## 1.0.1
+
+### Patch Changes
+
+- 08e7e6a: Preserve empty object and array replacements during merge by recording container replacement dots and using them during conflict resolution.
+- 8db6a17: Reject non-plain object instances inside serialized LWW JSON values during validation and deserialization.
+- da6f66c: Reject serialized object entries shadowed by equal-or-newer tombstones during validation and deserialization.
+- ce64f3e: Reject sequential JSON Patch moves into descendant targets before mutating state and treat validated self-moves as metadata-preserving no-ops.
+
 ## 1.0.0
 
 ### Major Changes
