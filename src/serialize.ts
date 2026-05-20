@@ -371,7 +371,7 @@ function deserializeNode(
       const entryPath = `${path}/entries/${k}`;
       const entryRaw = asRecord(v, entryPath);
       const dot = readDot(entryRaw.dot, `${entryPath}/dot`);
-      assertObjectEntryNotShadowedByTombstone(dot, tombstoneRaw, k, entryPath);
+      assertObjectEntryNotShadowedByTombstone(dot, tombstoneRaw, k, entryPath, path);
       if (observed) {
         observeVersionVectorDot(observed, dot);
       }
@@ -539,7 +539,7 @@ function validateSerializedNode(
       const entryPath = `${path}/entries/${k}`;
       const entryRaw = asRecord(v, entryPath);
       const dot = readDot(entryRaw.dot, `${entryPath}/dot`);
-      assertObjectEntryNotShadowedByTombstone(dot, tombstoneRaw, k, entryPath);
+      assertObjectEntryNotShadowedByTombstone(dot, tombstoneRaw, k, entryPath, path);
       validateSerializedNode(entryRaw.node, `${entryPath}/node`, depth + 1, budgetMeter, signal);
     }
 
@@ -628,12 +628,13 @@ function assertObjectEntryNotShadowedByTombstone(
   tombstoneRaw: Record<string, unknown>,
   key: string,
   entryPath: string,
+  objectPath: string,
 ): void {
   if (!Object.hasOwn(tombstoneRaw, key)) {
     return;
   }
 
-  const tombstonePath = entryPath.replace("/entries/", "/tombstone/");
+  const tombstonePath = `${objectPath}/tombstone/${key}`;
   const tombstoneValue = tombstoneRaw[key];
   const tombstoneDot = readDot(tombstoneValue, tombstonePath);
   if (compareDot(tombstoneDot, entryDot) >= 0) {
