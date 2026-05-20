@@ -349,6 +349,27 @@ describe("clock and state", () => {
     }
   });
 
+  it("uses exact prototype identity for strict runtime JSON object validation", () => {
+    const taggedPlainObject = Object.assign({ keep: true }, { [Symbol.toStringTag]: "Custom" });
+    const intermediatePrototype = Object.create(null) as Record<string, unknown>;
+    const exoticObject = Object.create(intermediatePrototype) as Record<string, JsonValue>;
+    exoticObject.value = true;
+
+    expect(() =>
+      createState(taggedPlainObject as unknown as JsonValue, {
+        actor: "A",
+        jsonValidation: "strict",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      createState(exoticObject as unknown as JsonValue, {
+        actor: "A",
+        jsonValidation: "strict",
+      }),
+    ).toThrow(JsonValueValidationError);
+  });
+
   it("normalizes non-plain object initial values consistently in normalize jsonValidation mode", () => {
     const invalidEntries = Object.fromEntries(
       nonPlainObjectCases().map((sample) => [sample.label, sample.create()]),
@@ -1951,6 +1972,10 @@ describe("serialization", () => {
   it("accepts plain and null-prototype objects in serialized LWW JSON values", () => {
     const nullPrototypeObject = Object.create(null) as Record<string, JsonValue>;
     nullPrototypeObject.keep = "value";
+    const taggedPlainObject = Object.assign(
+      { keep: true },
+      { [Symbol.toStringTag]: "SerializedPlainObject" },
+    );
     const payloads: readonly SerializedDoc[] = [
       {
         version: 1,
@@ -1968,12 +1993,45 @@ describe("serialization", () => {
           dot: { actor: "A", ctr: 1 },
         },
       },
+      {
+        version: 1,
+        root: {
+          kind: "lww",
+          value: taggedPlainObject as unknown as JsonValue,
+          dot: { actor: "A", ctr: 1 },
+        },
+      },
     ];
 
     for (const payload of payloads) {
       expect(tryDeserializeDoc(payload).ok).toBeTrue();
       expect(validateSerializedDoc(payload).ok).toBeTrue();
     }
+  });
+
+  it("rejects serialized LWW JSON values with exotic null-prototype ancestors", () => {
+    const intermediatePrototype = Object.create(null) as Record<string, unknown>;
+    const exoticObject = Object.create(intermediatePrototype) as Record<string, JsonValue>;
+    exoticObject.value = true;
+    const payload = {
+      version: 1,
+      root: {
+        kind: "lww",
+        value: exoticObject,
+        dot: { actor: "A", ctr: 1 },
+      },
+    } as unknown as SerializedDoc;
+    const result = tryDeserializeDoc(payload);
+    const validationResult = validateSerializedDoc(payload);
+
+    expect(result.ok).toBeFalse();
+    expect(validationResult.ok).toBeFalse();
+    if (result.ok || validationResult.ok) {
+      throw new Error("Expected serialized exotic object validation to fail");
+    }
+
+    expect(result.error).toBeInstanceOf(DeserializeError);
+    expect(validationResult.error).toBeInstanceOf(DeserializeError);
   });
 
   it("repairs stale serialized clock counters during state deserialization", () => {
