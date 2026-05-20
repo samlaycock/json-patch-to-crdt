@@ -852,7 +852,7 @@ function assertJsonValue(
     return;
   }
 
-  if (!isRecord(value)) {
+  if (!isPlainJsonObject(value)) {
     fail("INVALID_SERIALIZED_SHAPE", path, "expected JSON value");
   }
 
@@ -887,4 +887,17 @@ function toDeserializeFailure(error: unknown): DeserializeFailure | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (Object.prototype.toString.call(value) !== "[object Object]") {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || Object.getPrototypeOf(prototype) === null;
 }

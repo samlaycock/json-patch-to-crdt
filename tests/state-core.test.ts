@@ -1882,6 +1882,100 @@ describe("serialization", () => {
     expect(toJson(deserializeState(legacyState).doc)).toEqual({ counter: 1 });
   });
 
+  it("rejects non-plain serialized LWW JSON objects with typed failures", () => {
+    const invalidPayloads = nonPlainObjectCases().flatMap((sample) => [
+      {
+        label: `${sample.label} root`,
+        value: sample.create(),
+        path: "/root/value",
+      },
+      {
+        label: `${sample.label} nested`,
+        value: { nested: sample.create() },
+        path: "/root/value/nested",
+      },
+    ]);
+
+    for (const sample of invalidPayloads) {
+      const payload = {
+        version: 1,
+        root: {
+          kind: "lww",
+          value: sample.value,
+          dot: { actor: "A", ctr: 1 },
+        },
+      } as unknown as SerializedDoc;
+      const docResult = tryDeserializeDoc(payload);
+      const validationResult = validateSerializedDoc(payload);
+      const statePayload = {
+        version: 1,
+        doc: payload,
+        clock: { actor: "A", ctr: 1 },
+      };
+      const stateResult = tryDeserializeState(statePayload);
+      const stateValidationResult = validateSerializedState(statePayload);
+
+      expect(docResult.ok, sample.label).toBeFalse();
+      expect(validationResult.ok, sample.label).toBeFalse();
+      expect(stateResult.ok, sample.label).toBeFalse();
+      expect(stateValidationResult.ok, sample.label).toBeFalse();
+
+      if (docResult.ok || validationResult.ok || stateResult.ok || stateValidationResult.ok) {
+        throw new Error(`Expected typed deserialize failure for ${sample.label}`);
+      }
+
+      expect(docResult.error).toBeInstanceOf(DeserializeError);
+      expect(validationResult.error).toBeInstanceOf(DeserializeError);
+      expect(stateResult.error).toBeInstanceOf(DeserializeError);
+      expect(stateValidationResult.error).toBeInstanceOf(DeserializeError);
+      if (
+        !(docResult.error instanceof DeserializeError) ||
+        !(validationResult.error instanceof DeserializeError) ||
+        !(stateResult.error instanceof DeserializeError) ||
+        !(stateValidationResult.error instanceof DeserializeError)
+      ) {
+        throw new Error(`Expected DeserializeError for ${sample.label}`);
+      }
+
+      expect(docResult.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+      expect(validationResult.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+      expect(stateResult.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+      expect(stateValidationResult.error.reason).toBe("INVALID_SERIALIZED_SHAPE");
+      expect(docResult.error.path).toBe(sample.path);
+      expect(validationResult.error.path).toBe(sample.path);
+      expect(stateResult.error.path).toBe(sample.path);
+      expect(stateValidationResult.error.path).toBe(sample.path);
+    }
+  });
+
+  it("accepts plain and null-prototype objects in serialized LWW JSON values", () => {
+    const nullPrototypeObject = Object.create(null) as Record<string, JsonValue>;
+    nullPrototypeObject.keep = "value";
+    const payloads: readonly SerializedDoc[] = [
+      {
+        version: 1,
+        root: {
+          kind: "lww",
+          value: { plain: { nested: true } },
+          dot: { actor: "A", ctr: 1 },
+        },
+      },
+      {
+        version: 1,
+        root: {
+          kind: "lww",
+          value: nullPrototypeObject,
+          dot: { actor: "A", ctr: 1 },
+        },
+      },
+    ];
+
+    for (const payload of payloads) {
+      expect(tryDeserializeDoc(payload).ok).toBeTrue();
+      expect(validateSerializedDoc(payload).ok).toBeTrue();
+    }
+  });
+
   it("repairs stale serialized clock counters during state deserialization", () => {
     const base = createState({ a: 1 }, { actor: "A" });
     const state = applyPatch(base, [{ op: "add", path: "/b", value: 2 }]);
