@@ -73,28 +73,24 @@ describe("operation cancellation", () => {
 
   it("cancels CRDT-native sequence traversal", () => {
     const base = createState(
-      { items: Array.from({ length: 100 }, (_, index) => index) },
-      {
-        actor: "A",
-      },
+      Array.from({ length: 100 }, (_, index) => index),
+      { actor: "A" },
     );
     const head = createState(
-      { items: Array.from({ length: 100 }, (_, index) => index) },
-      {
-        actor: "B",
-      },
+      Array.from({ length: 100 }, (_, index) => index),
+      { actor: "B" },
     );
-    expect(head.doc.root.kind).toBe("obj");
-    if (head.doc.root.kind !== "obj") {
-      throw new Error("expected object root");
+    expect(head.doc.root.kind).toBe("seq");
+    if (head.doc.root.kind !== "seq") {
+      throw new Error("expected sequence root");
     }
 
-    const items = head.doc.root.entries.get("items")!.node as RgaSeq;
+    const items = head.doc.root as RgaSeq;
     Array.from(items.elems.values()).at(-1)!.value = newReg(-1, { actor: "C", ctr: 1 });
 
     expect(() =>
       crdtToJsonPatch(base.doc, head.doc, {
-        signal: abortOnCheck(5, "stop"),
+        signal: abortOnCheck(6, "stop"),
       }),
     ).toThrow(OperationCancelledError);
   });
