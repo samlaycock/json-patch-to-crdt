@@ -15,6 +15,7 @@ import {
   toJson,
   type JsonValue,
 } from "../src/index";
+import { crdtToJsonPatch, newReg, type RgaSeq } from "../src/internals";
 
 function abortedSignal(reason = "deadline exceeded"): AbortSignal {
   return AbortSignal.abort(reason);
@@ -44,6 +45,52 @@ describe("operation cancellation", () => {
     expect(() =>
       diffJsonPatch(makeLargeObject(100), makeLargeObject(100), {
         signal: abortedSignal(),
+      }),
+    ).toThrow(OperationCancelledError);
+  });
+
+  it("cancels CRDT-native diff work before traversal", () => {
+    const base = createState({ x: 1 }, { actor: "A" });
+    const head = createState({ x: 2 }, { actor: "B" });
+
+    expect(() =>
+      crdtToJsonPatch(base.doc, head.doc, {
+        signal: abortedSignal("stop"),
+      }),
+    ).toThrow(OperationCancelledError);
+  });
+
+  it("cancels CRDT-native object traversal", () => {
+    const base = createState(makeLargeObject(100), { actor: "A" });
+    const head = createState({ ...makeLargeObject(100), key99: -1 }, { actor: "B" });
+
+    expect(() =>
+      crdtToJsonPatch(base.doc, head.doc, {
+        signal: abortOnCheck(5, "stop"),
+      }),
+    ).toThrow(OperationCancelledError);
+  });
+
+  it("cancels CRDT-native sequence traversal", () => {
+    const base = createState(
+      Array.from({ length: 100 }, (_, index) => index),
+      { actor: "A" },
+    );
+    const head = createState(
+      Array.from({ length: 100 }, (_, index) => index),
+      { actor: "B" },
+    );
+    expect(head.doc.root.kind).toBe("seq");
+    if (head.doc.root.kind !== "seq") {
+      throw new Error("expected sequence root");
+    }
+
+    const items = head.doc.root as RgaSeq;
+    Array.from(items.elems.values()).at(-1)!.value = newReg(-1, { actor: "C", ctr: 1 });
+
+    expect(() =>
+      crdtToJsonPatch(base.doc, head.doc, {
+        signal: abortOnCheck(6, "stop"),
       }),
     ).toThrow(OperationCancelledError);
   });

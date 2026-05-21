@@ -17,6 +17,7 @@ import type {
 } from "./types";
 
 import { createBudgetMeter } from "./budget";
+import { throwIfAborted } from "./cancellation";
 import { TraversalDepthError, assertTraversalDepth, toDepthApplyError } from "./depth";
 import { compareDot, dotToElemId } from "./dot";
 import { materialize } from "./materialize";
@@ -1226,8 +1227,14 @@ function rebaseSequenceWindowDiffOps(
   return true;
 }
 
-function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean {
+function nodesJsonEqual(
+  baseNode: Node,
+  headNode: Node,
+  options: DiffOptions,
+  depth: number,
+): boolean {
   assertTraversalDepth(depth);
+  throwIfAborted(options.signal);
 
   if (baseNode === headNode) {
     return true;
@@ -1250,12 +1257,13 @@ function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean 
     }
 
     for (const [key, baseEntry] of baseNode.entries.entries()) {
+      throwIfAborted(options.signal);
       const headEntry = headObj.entries.get(key);
       if (!headEntry) {
         return false;
       }
 
-      if (!nodesJsonEqual(baseEntry.node, headEntry.node, depth + 1)) {
+      if (!nodesJsonEqual(baseEntry.node, headEntry.node, options, depth + 1)) {
         return false;
       }
     }
@@ -1270,13 +1278,14 @@ function nodesJsonEqual(baseNode: Node, headNode: Node, depth: number): boolean 
   const headCursor = rgaCreateLinearCursor(headSeq);
 
   while (true) {
+    throwIfAborted(options.signal);
     const baseElem = baseCursor.next();
     const headElem = headCursor.next();
     if (baseElem === undefined || headElem === undefined) {
       return baseElem === undefined && headElem === undefined;
     }
 
-    if (!nodesJsonEqual(baseElem.value, headElem.value, depth + 1)) {
+    if (!nodesJsonEqual(baseElem.value, headElem.value, options, depth + 1)) {
       return false;
     }
   }
@@ -1291,6 +1300,7 @@ function diffObjectNodes(
   depth: number,
 ): void {
   assertTraversalDepth(depth);
+  throwIfAborted(options.signal);
 
   const baseKeys = [...baseNode.entries.keys()].sort();
   const headKeys = [...headNode.entries.keys()].sort();
@@ -1299,6 +1309,7 @@ function diffObjectNodes(
   let headIndex = 0;
 
   while (baseIndex < baseKeys.length && headIndex < headKeys.length) {
+    throwIfAborted(options.signal);
     const baseKey = baseKeys[baseIndex]!;
     const headKey = headKeys[headIndex]!;
 
@@ -1320,6 +1331,7 @@ function diffObjectNodes(
   }
 
   while (baseIndex < baseKeys.length) {
+    throwIfAborted(options.signal);
     const baseKey = baseKeys[baseIndex]!;
     path.push(baseKey);
     ops.push({ op: "remove", path: stringifyJsonPointer(path) });
@@ -1330,6 +1342,7 @@ function diffObjectNodes(
   baseIndex = 0;
   headIndex = 0;
   while (baseIndex < baseKeys.length && headIndex < headKeys.length) {
+    throwIfAborted(options.signal);
     const baseKey = baseKeys[baseIndex]!;
     const headKey = headKeys[headIndex]!;
 
@@ -1356,6 +1369,7 @@ function diffObjectNodes(
   }
 
   while (headIndex < headKeys.length) {
+    throwIfAborted(options.signal);
     const headKey = headKeys[headIndex]!;
     const headEntry = headNode.entries.get(headKey)!;
     path.push(headKey);
@@ -1371,13 +1385,14 @@ function diffObjectNodes(
   baseIndex = 0;
   headIndex = 0;
   while (baseIndex < baseKeys.length && headIndex < headKeys.length) {
+    throwIfAborted(options.signal);
     const baseKey = baseKeys[baseIndex]!;
     const headKey = headKeys[headIndex]!;
 
     if (baseKey === headKey) {
       const baseEntry = baseNode.entries.get(baseKey)!;
       const headEntry = headNode.entries.get(headKey)!;
-      if (!nodesJsonEqual(baseEntry.node, headEntry.node, depth + 1)) {
+      if (!nodesJsonEqual(baseEntry.node, headEntry.node, options, depth + 1)) {
         path.push(baseKey);
         diffNodeToPatch(path, baseEntry.node, headEntry.node, options, ops, depth + 1);
         path.pop();
@@ -1404,6 +1419,7 @@ function diffSequenceNodes(
   ops: JsonPatchOp[],
   depth: number,
 ): void {
+  throwIfAborted(options.signal);
   const arrayStrategy = options.arrayStrategy ?? "lcs";
   if (arrayStrategy === "atomic") {
     const seqOps = diffJsonPatch(materialize(baseNode), materialize(headSeq), options);
@@ -1418,8 +1434,14 @@ function diffSequenceNodes(
   let prefixLength = 0;
   while (
     prefixLength < sharedLength &&
-    nodesJsonEqual(baseElems[prefixLength]!.value, headElems[prefixLength]!.value, depth + 1)
+    nodesJsonEqual(
+      baseElems[prefixLength]!.value,
+      headElems[prefixLength]!.value,
+      options,
+      depth + 1,
+    )
   ) {
+    throwIfAborted(options.signal);
     prefixLength += 1;
   }
 
@@ -1432,8 +1454,9 @@ function diffSequenceNodes(
   while (
     baseEnd > prefixLength &&
     headEnd > prefixLength &&
-    nodesJsonEqual(baseElems[baseEnd - 1]!.value, headElems[headEnd - 1]!.value, depth + 1)
+    nodesJsonEqual(baseElems[baseEnd - 1]!.value, headElems[headEnd - 1]!.value, options, depth + 1)
   ) {
+    throwIfAborted(options.signal);
     baseEnd -= 1;
     headEnd -= 1;
   }
@@ -1474,6 +1497,7 @@ function diffNodeToPatch(
   depth: number,
 ): void {
   assertTraversalDepth(depth);
+  throwIfAborted(options.signal);
 
   if (baseNode === headNode) {
     return;
@@ -1521,6 +1545,7 @@ function diffNodeToPatch(
  * @returns An array of JSON Patch operations that transform base into head.
  */
 export function crdtToJsonPatch(base: Doc, head: Doc, options?: DiffOptions): JsonPatchOp[] {
+  throwIfAborted(options?.signal);
   // Preserve full-document runtime guardrail behavior for strict/normalize modes.
   if ((options?.jsonValidation ?? "none") !== "none" || options?.resourceBudget !== undefined) {
     return diffJsonPatch(materialize(base.root), materialize(head.root), options);
@@ -1536,6 +1561,7 @@ export function crdtNodesToJsonPatch(
   options?: DiffOptions,
   depth = 0,
 ): JsonPatchOp[] {
+  throwIfAborted(options?.signal);
   const ops: JsonPatchOp[] = [];
   diffNodeToPatch([], baseNode, headNode, options ?? {}, ops, depth);
   return ops;
